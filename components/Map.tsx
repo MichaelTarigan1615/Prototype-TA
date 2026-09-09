@@ -55,7 +55,7 @@ const Map = () => {
   
   const [keplingMaster, setKeplingMaster] = useState<any[]>([]); 
   const [keplingAcquisition, setKeplingAcquisition] = useState<Record<string, number>>({}); 
-  const [csvData, setCsvData] = useState<any[]>([]); // Simpan seluruh isi CSV Transaksi
+  const [csvData, setCsvData] = useState<any[]>([]); 
   
   const [listKecamatan, setListKecamatan] = useState<{name: string, bounds: any}[]>([]);
   const [listKelurahan, setListKelurahan] = useState<{name: string, bounds: any, feature: any}[]>([]);
@@ -95,7 +95,7 @@ const Map = () => {
           if (row.Wilayah) counts[row.Wilayah] = (counts[row.Wilayah] || 0) + 1;
         });
         setKeplingAcquisition(counts);
-        setCsvData(results.data); // Menyimpan detail nama & NIK untuk popup
+        setCsvData(results.data); 
       }
     });
   }, []);
@@ -143,7 +143,6 @@ const Map = () => {
       const target = 50; 
       const persentase = (capaian / target) * 100;
 
-      // --- EKSTRAK DAFTAR PESERTA UNTUK LINGKUNGAN INI ---
       const daftarPeserta = csvData.filter((d: any) => d.Wilayah === wilayahKey);
 
       let lat = 0, lng = 0;
@@ -165,13 +164,7 @@ const Map = () => {
       }
 
       if (lat && lng) {
-        // Memasukkan array "peserta" ke dalam objek Kepling
-        data.push({ 
-          id: i + 1, 
-          name: `Lingkungan ${row.Nomor}`, 
-          lat, lng, target, capaian, persentase, 
-          peserta: daftarPeserta 
-        });
+        data.push({ id: i + 1, name: `Lingkungan ${row.Nomor}`, lat, lng, target, capaian, persentase, peserta: daftarPeserta });
       }
     });
 
@@ -195,174 +188,11 @@ const Map = () => {
   };
 
   return (
-    <div className="flex w-full h-screen bg-gray-50 overflow-hidden">
-      {/* --- PANEL SISI (SIDEBAR) --- */}
-      <div className="w-1/4 h-full bg-blue-900 shadow-2xl z-10 flex flex-col">
-        <div className="bg-blue-950 text-white p-6 border-b border-blue-800">
-          <h1 className="text-xl font-bold leading-tight">Dashboard UCJ 2026</h1>
-          <p className="text-blue-300 text-sm mt-1">BPJS Ketenagakerjaan Medan</p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col">
-          
-          {/* LEVEL 1: AGREGAT KOTA MEDAN */}
-          {level === 'kecamatan' && (
-            <div className="flex flex-col h-full">
-              <div className="bg-white p-4 border-b border-gray-200 shadow-sm z-10">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Agregat Kota Medan</p>
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  <div className="border rounded p-2 text-center bg-gray-50">
-                    <p className="text-[10px] text-gray-500 font-semibold">KECAMATAN</p>
-                    <p className="text-lg font-bold text-gray-800">21</p>
-                  </div>
-                  <div className="border rounded p-2 text-center bg-gray-50">
-                    <p className="text-[10px] text-gray-500 font-semibold">KELURAHAN</p>
-                    <p className="text-lg font-bold text-gray-800">151</p>
-                  </div>
-                  <div className="border rounded p-2 text-center bg-gray-50">
-                    <p className="text-[10px] text-gray-500 font-semibold">LINGKUNGAN</p>
-                    <p className="text-lg font-bold text-gray-800">2.001</p>
-                  </div>
-                </div>
-                <div className="flex gap-2 mb-3">
-                  <div className="flex-1 border rounded p-2">
-                    <p className="text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
-                    <p className="text-lg font-bold text-gray-800">{aggKota.target.toLocaleString('id-ID')}</p>
-                  </div>
-                  <div className="flex-1 border rounded p-2">
-                    <p className="text-xs text-gray-500 font-semibold">TOTAL AKUISISI</p>
-                    <p className="text-lg font-bold text-blue-600">{aggKota.capaian.toLocaleString('id-ID')}</p>
-                  </div>
-                </div>
-                <div className="border rounded p-3">
-                   <p className="text-xs text-gray-500 font-semibold flex justify-between">
-                     <span>PERSENTASE CAPAIAN</span>
-                     <span className={`text-lg font-bold ${aggKota.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
-                       {aggKota.persentase.toFixed(1)}%
-                     </span>
-                   </p>
-                   <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                      <div className={`h-2 rounded-full ${aggKota.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKota.persentase, 100)}%` }}></div>
-                   </div>
-                </div>
-              </div>
-
-              <div className="p-4 flex-1 overflow-y-auto">
-                <h2 className="text-lg font-bold text-gray-800 mb-2">Pilih Kecamatan</h2>
-                <div className="space-y-2 mt-2">
-                  {listKecamatan.map((kec, idx) => (
-                    <button key={idx} onClick={() => handleSelectKecamatanFromSidebar(kec.name, kec.bounds)} className="w-full text-left bg-white shadow-sm hover:bg-blue-50 border border-gray-100 p-3 rounded-lg font-semibold text-gray-700 hover:text-blue-700 transition">
-                      Kecamatan {kec.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* LEVEL 2: AGREGAT KECAMATAN */}
-          {level === 'kelurahan' && (
-            <div className="flex flex-col h-full">
-              <div className="bg-white p-4 border-b border-gray-200 shadow-sm z-10">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Agregat Kec. {selectedKecamatan}</p>
-                <div className="flex gap-2 mb-3">
-                  <div className="flex-1 border rounded p-2">
-                    <p className="text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
-                    <p className="text-lg font-bold text-gray-800">{aggKec.target.toLocaleString('id-ID')}</p>
-                  </div>
-                  <div className="flex-1 border rounded p-2">
-                    <p className="text-xs text-gray-500 font-semibold">TOTAL CAPAIAN</p>
-                    <p className="text-lg font-bold text-blue-600">{aggKec.capaian.toLocaleString('id-ID')}</p>
-                  </div>
-                </div>
-                <div className="border rounded p-3">
-                   <p className="text-xs text-gray-500 font-semibold flex justify-between">
-                     <span>PERSENTASE CAPAIAN</span>
-                     <span className={`text-lg font-bold ${aggKec.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
-                       {aggKec.persentase.toFixed(1)}%
-                     </span>
-                   </p>
-                   <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                      <div className={`h-2 rounded-full ${aggKec.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKec.persentase, 100)}%` }}></div>
-                   </div>
-                </div>
-              </div>
-
-              <div className="p-4 flex flex-col flex-1">
-                <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mt-1 mb-4 text-sm shadow-sm">
-                  &larr; Kembali ke Peta Kota
-                </button>
-                <h2 className="text-lg font-bold text-gray-800 mb-2">Pilih Kelurahan</h2>
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                  {listKelurahan.map((kel, idx) => (
-                    <button key={idx} onClick={() => handleSelectKelurahanFromSidebar(kel.name, kel.bounds, kel.feature)} className="w-full text-left bg-white shadow-sm hover:bg-emerald-50 border border-emerald-100 p-3 rounded-lg font-semibold text-emerald-800 transition">
-                      Kel. {kel.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* LEVEL 3: AGREGAT KELURAHAN (DAN DAFTAR KEPLING) */}
-          {level === 'kepling' && (
-            <div className="flex flex-col h-full">
-              <div className="bg-white p-4 border-b border-gray-200 shadow-sm z-10">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Agregat Kel. {selectedKelurahan}</p>
-                <div className="flex gap-2 mb-3">
-                  <div className="flex-1 border rounded p-2">
-                    <p className="text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
-                    <p className="text-lg font-bold text-gray-800">{aggKel.target.toLocaleString('id-ID')}</p>
-                  </div>
-                  <div className="flex-1 border rounded p-2">
-                    <p className="text-xs text-gray-500 font-semibold">TOTAL CAPAIAN</p>
-                    <p className="text-lg font-bold text-blue-600">{aggKel.capaian.toLocaleString('id-ID')}</p>
-                  </div>
-                </div>
-                <div className="border rounded p-3">
-                   <p className="text-xs text-gray-500 font-semibold flex justify-between">
-                     <span>PERSENTASE CAPAIAN</span>
-                     <span className={`text-lg font-bold ${aggKel.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
-                        {aggKel.persentase.toFixed(1)}%
-                     </span>
-                   </p>
-                   <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                      <div className={`h-2 rounded-full ${aggKel.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKel.persentase, 100)}%` }}></div>
-                   </div>
-                </div>
-              </div>
-
-              <div className="p-4 flex flex-col flex-1">
-                <button onClick={() => { setLevel('kelurahan'); setKeplingData([]); setSelectedKelurahan(null); }} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mt-1 mb-4 text-sm">
-                  &larr; Kembali ke Daftar Kelurahan
-                </button>
-                <h3 className="font-bold text-gray-700 border-b pb-2 mb-3">Prioritas Tindak Lanjut Lingkungan:</h3>
-                
-                <div className="flex-1 overflow-y-auto pr-2 space-y-3 pb-4">
-                  {keplingData.map(kep => (
-                    <div key={kep.id} className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-gray-800">{kep.name}</span>
-                        <span className={`text-xs font-bold px-2 py-1 rounded ${kep.persentase >= 50 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{kep.persentase.toFixed(1)}%</span>
-                      </div>
-                      <div className="text-xs text-gray-500 flex justify-between">
-                        <span>Capaian: {kep.capaian}</span>
-                        <span>Target: {kep.target}</span>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-1.5 mt-2 overflow-hidden">
-                        <div className={`h-full rounded-full ${kep.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${kep.persentase}%` }}></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* --- AREA PETA DENGAN KUNCI BOUNDS --- */}
-      <div className="w-3/4 h-full relative bg-gray-100">
+    // PERUBAHAN RESPONSIVE: flex-col untuk HP, md:flex-row untuk Laptop
+    <div className="flex flex-col md:flex-row w-full h-[100dvh] bg-gray-50 overflow-hidden">
+      
+      {/* --- AREA PETA (DI HP TAMPIL DI ATAS, DI LAPTOP TAMPIL DI KANAN) --- */}
+      <div className="w-full md:w-3/4 h-[55%] md:h-full relative bg-gray-100 order-1 md:order-2 flex-shrink-0 md:flex-shrink">
         <MapContainer center={defaultPosition} zoom={12} minZoom={11} maxBounds={medanBounds} maxBoundsViscosity={1.0} className="w-full h-full z-0">
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} />
@@ -419,13 +249,11 @@ const Map = () => {
             />
           )}
 
-          {/* --- TITIK KEPLING DENGAN POPUP DETAIL PESERTA --- */}
           {level === 'kepling' && keplingData.map((kep) => (
             <CircleMarker 
               key={kep.id} center={[kep.lat, kep.lng]} radius={8} color="white" weight={2} fillColor={kep.persentase >= 50 ? '#10b981' : '#ef4444'} fillOpacity={1}
               eventHandlers={{ click: (e) => e.originalEvent.stopPropagation() }}
             >
-              {/* MODIFIKASI POPUP: Menambahkan Daftar Peserta Scrollable */}
               <Popup>
                 <div className="w-56 font-sans">
                   <h3 className="font-bold text-lg mb-1 text-center text-gray-800">{kep.name}</h3>
@@ -436,7 +264,6 @@ const Map = () => {
                     {kep.persentase.toFixed(1)}% Terealisasi
                   </div>
 
-                  {/* DAFTAR PESERTA (DETAILS ON DEMAND) */}
                   <div className="mt-3 pt-2 border-t border-gray-200">
                     <p className="text-[10px] font-bold text-gray-500 mb-1">DAFTAR PESERTA ({kep.peserta?.length || 0}):</p>
                     <div className="max-h-36 overflow-y-auto border border-gray-200 rounded bg-gray-50 p-1 custom-scrollbar">
@@ -458,6 +285,169 @@ const Map = () => {
           ))}
         </MapContainer>
       </div>
+
+      {/* --- PANEL SISI / SIDEBAR (DI HP TAMPIL DI BAWAH PETA) --- */}
+      <div className="w-full md:w-1/4 h-[45%] md:h-full bg-blue-900 shadow-2xl z-10 flex flex-col order-2 md:order-1 border-t md:border-t-0 md:border-r border-gray-200">
+        <div className="bg-blue-950 text-white p-3 md:p-6 border-b border-blue-800 flex-shrink-0">
+          <h1 className="text-lg md:text-xl font-bold leading-tight">Dashboard UCJ 2026</h1>
+          <p className="text-blue-300 text-xs md:text-sm mt-1">BPJS Ketenagakerjaan Medan</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col">
+          
+          {level === 'kecamatan' && (
+            <div className="flex flex-col h-full">
+              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm z-10 flex-shrink-0">
+                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 md:mb-3">Agregat Kota Medan</p>
+                <div className="grid grid-cols-3 gap-1 md:gap-2 mb-2 md:mb-3">
+                  <div className="border rounded p-1 md:p-2 text-center bg-gray-50">
+                    <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">KECAMATAN</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">21</p>
+                  </div>
+                  <div className="border rounded p-1 md:p-2 text-center bg-gray-50">
+                    <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">KELURAHAN</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">151</p>
+                  </div>
+                  <div className="border rounded p-1 md:p-2 text-center bg-gray-50">
+                    <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">LINGKUNGAN</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">2.001</p>
+                  </div>
+                </div>
+                <div className="flex gap-1 md:gap-2 mb-2 md:mb-3">
+                  <div className="flex-1 border rounded p-1.5 md:p-2">
+                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">{aggKota.target.toLocaleString('id-ID')}</p>
+                  </div>
+                  <div className="flex-1 border rounded p-1.5 md:p-2">
+                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TOTAL AKUISISI</p>
+                    <p className="text-sm md:text-lg font-bold text-blue-600">{aggKota.capaian.toLocaleString('id-ID')}</p>
+                  </div>
+                </div>
+                <div className="border rounded p-2 md:p-3">
+                   <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between">
+                     <span>PERSENTASE</span>
+                     <span className={`text-sm md:text-lg font-bold ${aggKota.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                       {aggKota.persentase.toFixed(1)}%
+                     </span>
+                   </p>
+                   <div className="w-full bg-gray-200 rounded-full h-1.5 md:h-2 mt-1 md:mt-2">
+                      <div className={`h-1.5 md:h-2 rounded-full ${aggKota.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKota.persentase, 100)}%` }}></div>
+                   </div>
+                </div>
+              </div>
+
+              <div className="p-3 md:p-4 flex-1 overflow-y-auto">
+                <h2 className="text-sm md:text-lg font-bold text-gray-800 mb-2">Pilih Kecamatan</h2>
+                <div className="space-y-2 mt-2">
+                  {listKecamatan.map((kec, idx) => (
+                    <button key={idx} onClick={() => handleSelectKecamatanFromSidebar(kec.name, kec.bounds)} className="w-full text-left bg-white shadow-sm hover:bg-blue-50 border border-gray-100 p-2 md:p-3 rounded-lg text-xs md:text-sm font-semibold text-gray-700 hover:text-blue-700 transition">
+                      Kecamatan {kec.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {level === 'kelurahan' && (
+            <div className="flex flex-col h-full">
+              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm z-10 flex-shrink-0">
+                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 md:mb-3">Agregat Kec. {selectedKecamatan}</p>
+                <div className="flex gap-1 md:gap-2 mb-2 md:mb-3">
+                  <div className="flex-1 border rounded p-1.5 md:p-2">
+                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">{aggKec.target.toLocaleString('id-ID')}</p>
+                  </div>
+                  <div className="flex-1 border rounded p-1.5 md:p-2">
+                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">CAPAIAN</p>
+                    <p className="text-sm md:text-lg font-bold text-blue-600">{aggKec.capaian.toLocaleString('id-ID')}</p>
+                  </div>
+                </div>
+                <div className="border rounded p-2 md:p-3">
+                   <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between">
+                     <span>PERSENTASE</span>
+                     <span className={`text-sm md:text-lg font-bold ${aggKec.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                       {aggKec.persentase.toFixed(1)}%
+                     </span>
+                   </p>
+                   <div className="w-full bg-gray-200 rounded-full h-1.5 md:h-2 mt-1 md:mt-2">
+                      <div className={`h-1.5 md:h-2 rounded-full ${aggKec.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKec.persentase, 100)}%` }}></div>
+                   </div>
+                </div>
+              </div>
+
+              <div className="p-3 md:p-4 flex flex-col flex-1">
+                <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mt-1 mb-3 text-xs md:text-sm shadow-sm">
+                  &larr; Kembali ke Peta Kota
+                </button>
+                <h2 className="text-sm md:text-lg font-bold text-gray-800 mb-2">Pilih Kelurahan</h2>
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                  {listKelurahan.map((kel, idx) => (
+                    <button key={idx} onClick={() => handleSelectKelurahanFromSidebar(kel.name, kel.bounds, kel.feature)} className="w-full text-left bg-white shadow-sm hover:bg-emerald-50 border border-emerald-100 p-2 md:p-3 rounded-lg text-xs md:text-sm font-semibold text-emerald-800 transition">
+                      Kel. {kel.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {level === 'kepling' && (
+            <div className="flex flex-col h-full">
+              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm z-10 flex-shrink-0">
+                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 md:mb-3">Agregat Kel. {selectedKelurahan}</p>
+                <div className="flex gap-1 md:gap-2 mb-2 md:mb-3">
+                  <div className="flex-1 border rounded p-1.5 md:p-2">
+                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">{aggKel.target.toLocaleString('id-ID')}</p>
+                  </div>
+                  <div className="flex-1 border rounded p-1.5 md:p-2">
+                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">CAPAIAN</p>
+                    <p className="text-sm md:text-lg font-bold text-blue-600">{aggKel.capaian.toLocaleString('id-ID')}</p>
+                  </div>
+                </div>
+                <div className="border rounded p-2 md:p-3">
+                   <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between">
+                     <span>PERSENTASE</span>
+                     <span className={`text-sm md:text-lg font-bold ${aggKel.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                        {aggKel.persentase.toFixed(1)}%
+                     </span>
+                   </p>
+                   <div className="w-full bg-gray-200 rounded-full h-1.5 md:h-2 mt-1 md:mt-2">
+                      <div className={`h-1.5 md:h-2 rounded-full ${aggKel.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKel.persentase, 100)}%` }}></div>
+                   </div>
+                </div>
+              </div>
+
+              <div className="p-3 md:p-4 flex flex-col flex-1">
+                <button onClick={() => { setLevel('kelurahan'); setKeplingData([]); setSelectedKelurahan(null); }} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mt-1 mb-3 text-xs md:text-sm">
+                  &larr; Kembali ke Daftar Kelurahan
+                </button>
+                <h3 className="text-sm md:text-base font-bold text-gray-700 border-b pb-2 mb-3">Prioritas Tindak Lanjut:</h3>
+                
+                <div className="flex-1 overflow-y-auto pr-2 space-y-2 md:space-y-3 pb-4">
+                  {keplingData.map(kep => (
+                    <div key={kep.id} className="bg-white border border-gray-200 rounded-lg p-2 md:p-3 shadow-sm hover:shadow-md transition">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs md:text-sm font-bold text-gray-800">{kep.name}</span>
+                        <span className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded ${kep.persentase >= 50 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{kep.persentase.toFixed(1)}%</span>
+                      </div>
+                      <div className="text-[10px] md:text-xs text-gray-500 flex justify-between">
+                        <span>Capaian: {kep.capaian}</span>
+                        <span>Target: {kep.target}</span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1.5 md:mt-2 overflow-hidden">
+                        <div className={`h-full rounded-full ${kep.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${kep.persentase}%` }}></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 };
