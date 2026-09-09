@@ -56,6 +56,7 @@ const Map = () => {
   const [keplingMaster, setKeplingMaster] = useState<any[]>([]); 
   const [keplingAcquisition, setKeplingAcquisition] = useState<Record<string, number>>({}); 
   const [csvData, setCsvData] = useState<any[]>([]); 
+  const [totalAkuisisi, setTotalAkuisisi] = useState(0); 
   
   const [listKecamatan, setListKecamatan] = useState<{name: string, bounds: any}[]>([]);
   const [listKelurahan, setListKelurahan] = useState<{name: string, bounds: any, feature: any}[]>([]);
@@ -66,9 +67,53 @@ const Map = () => {
   
   const [keplingData, setKeplingData] = useState<any[]>([]);
   const [keplingMemory, setKeplingMemory] = useState<Record<string, {lat: number, lng: number}>>({});
-
   const [mapBoundsTarget, setMapBoundsTarget] = useState<any>(null);
   const [mapCenterTarget, setMapCenterTarget] = useState<[number, number] | null>(null);
+
+  // --- SOLUSI: REF UNTUK MENGONTROL MARKER PETA DARI SIDEBAR ---
+  // Kita menyimpan seluruh referensi titik marker di dalam kamus ini
+  const markerRefs = useRef<Record<number, any>>({});
+
+  const [isMobile, setIsMobile] = useState(false);
+  const [sheetHeight, setSheetHeight] = useState(35); 
+  const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  const startDrag = () => setIsDragging(true);
+
+  useEffect(() => {
+    const onMove = (e: TouchEvent | MouseEvent) => {
+      if (!isDragging) return;
+      const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+      const vh = ((window.innerHeight - clientY) / window.innerHeight) * 100;
+      if (vh >= 15 && vh <= 85) setSheetHeight(vh);
+    };
+    const onEnd = () => setIsDragging(false);
+
+    if (isDragging) {
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onEnd);
+      window.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('touchend', onEnd);
+      document.body.style.userSelect = 'none'; 
+    } else {
+      document.body.style.userSelect = '';
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      document.body.style.userSelect = '';
+    };
+  }, [isDragging]);
 
   const levelRef = useRef(level);
   useEffect(() => { levelRef.current = level; }, [level]);
@@ -91,10 +136,15 @@ const Map = () => {
       download: true, header: true, delimiter: ',',
       complete: (results) => {
         const counts: Record<string, number> = {};
+        let total = 0;
         results.data.forEach((row: any) => {
-          if (row.Wilayah) counts[row.Wilayah] = (counts[row.Wilayah] || 0) + 1;
+          if (row.Wilayah) {
+            counts[row.Wilayah] = (counts[row.Wilayah] || 0) + 1;
+            total++;
+          }
         });
         setKeplingAcquisition(counts);
+        setTotalAkuisisi(total);
         setCsvData(results.data); 
       }
     });
@@ -103,16 +153,13 @@ const Map = () => {
   const getAggregate = (type: 'kota' | 'kecamatan' | 'kelurahan', name?: string) => {
     let tTarget = 0; let tCapaian = 0;
     let filtered = keplingMaster;
-    
     if (type === 'kecamatan' && name) filtered = keplingMaster.filter(k => k.Kecamatan && k.Kecamatan.toUpperCase() === name.toUpperCase());
     else if (type === 'kelurahan' && name) filtered = keplingMaster.filter(k => k.Kelurahan && k.Kelurahan.toUpperCase() === name.toUpperCase());
 
     filtered.forEach(k => {
       const key = `${k.Kecamatan}-${k.Kelurahan}-${k.Nomor}`;
-      tTarget += 50; 
-      tCapaian += (keplingAcquisition[key] || 0);
+      tTarget += 50; tCapaian += (keplingAcquisition[key] || 0);
     });
-
     return { target: tTarget, capaian: tCapaian, persentase: tTarget > 0 ? (tCapaian / tTarget) * 100 : 0 };
   };
 
@@ -142,7 +189,6 @@ const Map = () => {
       const capaian = keplingAcquisition[wilayahKey] || 0;
       const target = 50; 
       const persentase = (capaian / target) * 100;
-
       const daftarPeserta = csvData.filter((d: any) => d.Wilayah === wilayahKey);
 
       let lat = 0, lng = 0;
@@ -172,28 +218,34 @@ const Map = () => {
     setKeplingData(data.sort((a, b) => a.persentase - b.persentase));
   };
 
+  const validKelurahanNames = selectedKecamatan 
+    ? Array.from(new Set(keplingMaster.filter(k => k.Kecamatan && k.Kecamatan.toUpperCase() === selectedKecamatan.toUpperCase()).map(k => k.Kelurahan.toUpperCase())))
+    : [];
+  const displayKelurahans = listKelurahan.filter(kel => validKelurahanNames.includes(kel.name.toUpperCase()));
+
   const handleSelectKecamatanFromSidebar = (namaKec: string, bounds: any) => {
     setLevel('kelurahan'); setSelectedKecamatan(namaKec);
     setMapBoundsTarget(bounds); setKeplingData([]); 
+    if (isMobile) setSheetHeight(45); 
   };
 
   const handleSelectKelurahanFromSidebar = (namaKel: string, bounds: any, feature: any) => {
     setLevel('kepling'); setSelectedKelurahan(namaKel);
-    setMapBoundsTarget(bounds); generateKeplingData(bounds, namaKel, feature);
+    setMapBoundsTarget(bounds); generateKeplingData(bounds, namaKel, feature); 
+    if (isMobile) setSheetHeight(45);
   };
 
   const handleResetToCity = () => {
     setLevel('kecamatan'); setSelectedKecamatan(null); setSelectedKelurahan(null);
-    setMapBoundsTarget(null); setMapCenterTarget(defaultPosition); setKeplingData([]);
+    setMapBoundsTarget(null); setMapCenterTarget(defaultPosition); setKeplingData([]); 
   };
 
   return (
-    // PERUBAHAN RESPONSIVE: flex-col untuk HP, md:flex-row untuk Laptop
-    <div className="flex flex-col md:flex-row w-full h-[100dvh] bg-gray-50 overflow-hidden">
+    <div className="flex flex-col md:flex-row w-full h-[100dvh] relative bg-gray-50 overflow-hidden">
       
-      {/* --- AREA PETA (DI HP TAMPIL DI ATAS, DI LAPTOP TAMPIL DI KANAN) --- */}
-      <div className="w-full md:w-3/4 h-[55%] md:h-full relative bg-gray-100 order-1 md:order-2 flex-shrink-0 md:flex-shrink">
-        <MapContainer center={defaultPosition} zoom={12} minZoom={11} maxBounds={medanBounds} maxBoundsViscosity={1.0} className="w-full h-full z-0">
+      {/* --- AREA PETA --- */}
+      <div className="w-full md:w-3/4 h-full relative bg-gray-100 z-0">
+        <MapContainer center={defaultPosition} zoom={12} minZoom={11} maxBounds={medanBounds} maxBoundsViscosity={1.0} className="w-full h-full z-0 pb-16 md:pb-0">
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} />
 
@@ -210,9 +262,7 @@ const Map = () => {
                   });
                 });
                 layer.bindTooltip(namaKec, { direction: "center", className: "font-bold" });
-                layer.on({
-                  click: (e) => { if (typeof e.target.getBounds === 'function') handleSelectKecamatanFromSidebar(namaKec, e.target.getBounds()); }
-                });
+                layer.on({ click: (e) => { if (typeof e.target.getBounds === 'function') handleSelectKecamatanFromSidebar(namaKec, e.target.getBounds()); }});
               }}
             />
           )}
@@ -238,10 +288,6 @@ const Map = () => {
                 layer.bindTooltip(`Kel. ${namaKel}`, { direction: "auto" });
                 layer.on({
                   click: (e) => {
-                    if (levelRef.current === 'kepling') {
-                      if (typeof e.target.getBounds === 'function') handleSelectKelurahanFromSidebar(namaKel, e.target.getBounds(), feature);
-                      return; 
-                    }
                     if (typeof e.target.getBounds === 'function') handleSelectKelurahanFromSidebar(namaKel, e.target.getBounds(), feature);
                   }
                 });
@@ -252,9 +298,18 @@ const Map = () => {
           {level === 'kepling' && keplingData.map((kep) => (
             <CircleMarker 
               key={kep.id} center={[kep.lat, kep.lng]} radius={8} color="white" weight={2} fillColor={kep.persentase >= 50 ? '#10b981' : '#ef4444'} fillOpacity={1}
-              eventHandlers={{ click: (e) => e.originalEvent.stopPropagation() }}
+              // Mendaftarkan marker ini ke dalam memori Referensi agar bisa dikendalikan dari Sidebar
+              ref={(ref) => {
+                if (ref) markerRefs.current[kep.id] = ref;
+              }}
+              eventHandlers={{ 
+                click: (e) => {
+                  e.originalEvent.stopPropagation();
+                  if (isMobile) setSheetHeight(15); // Turunkan sidebar otomatis agar popup peta terlihat jelas di HP
+                }
+              }}
             >
-              <Popup>
+              <Popup autoPan={true}>
                 <div className="w-56 font-sans">
                   <h3 className="font-bold text-lg mb-1 text-center text-gray-800">{kep.name}</h3>
                   <hr className="mb-2"/>
@@ -264,9 +319,10 @@ const Map = () => {
                     {kep.persentase.toFixed(1)}% Terealisasi
                   </div>
 
+                  {/* DAFTAR PESERTA KINI HANYA MUNCUL DI DALAM POPUP PETA INI SAJA */}
                   <div className="mt-3 pt-2 border-t border-gray-200">
                     <p className="text-[10px] font-bold text-gray-500 mb-1">DAFTAR PESERTA ({kep.peserta?.length || 0}):</p>
-                    <div className="max-h-36 overflow-y-auto border border-gray-200 rounded bg-gray-50 p-1 custom-scrollbar">
+                    <div className="max-h-36 overflow-y-auto border border-gray-200 rounded bg-gray-50 p-1 custom-scrollbar" onTouchStart={(e) => e.stopPropagation()}>
                       {kep.peserta && kep.peserta.length > 0 ? (
                         kep.peserta.map((p: any, idx: number) => (
                           <div key={idx} className="border-b border-gray-200 last:border-0 py-1.5 px-1 hover:bg-gray-100 transition">
@@ -275,7 +331,7 @@ const Map = () => {
                           </div>
                         ))
                       ) : (
-                        <div className="text-center text-gray-400 text-xs py-3 font-medium">Belum ada peserta terdaftar</div>
+                        <div className="text-center text-gray-400 text-xs py-3 font-medium">Belum ada peserta</div>
                       )}
                     </div>
                   </div>
@@ -286,29 +342,54 @@ const Map = () => {
         </MapContainer>
       </div>
 
-      {/* --- PANEL SISI / SIDEBAR (DI HP TAMPIL DI BAWAH PETA) --- */}
-      <div className="w-full md:w-1/4 h-[45%] md:h-full bg-blue-900 shadow-2xl z-10 flex flex-col order-2 md:order-1 border-t md:border-t-0 md:border-r border-gray-200">
-        <div className="bg-blue-950 text-white p-3 md:p-6 border-b border-blue-800 flex-shrink-0">
-          <h1 className="text-lg md:text-xl font-bold leading-tight">Dashboard UCJ 2026</h1>
-          <p className="text-blue-300 text-xs md:text-sm mt-1">BPJS Ketenagakerjaan Medan</p>
+      {/* --- PANEL SISI / BOTTOM SHEET DRAGGABLE --- */}
+      <div 
+        className="w-full md:w-1/4 bg-blue-900 shadow-[0_-10px_40px_rgba(0,0,0,0.2)] md:shadow-2xl z-[1000] flex flex-col absolute md:relative bottom-0 right-0 rounded-t-3xl md:rounded-none"
+        style={isMobile ? { height: `${sheetHeight}vh`, transition: isDragging ? 'none' : 'height 0.3s ease-out' } : { height: '100%' }}
+      >
+        
+        {/* TUAS PENARIK (HANDLE) */}
+        <div 
+          className="md:hidden h-[48px] flex flex-col items-center justify-center bg-blue-950 rounded-t-3xl cursor-ns-resize flex-shrink-0 touch-none"
+          onMouseDown={startDrag}
+          onTouchStart={startDrag}
+        >
+          <div className="w-12 h-1.5 bg-blue-300 rounded-full mb-1 opacity-80 pointer-events-none"></div>
+          <span className="text-blue-100 text-[10px] font-bold uppercase tracking-widest pointer-events-none">
+             Geser untuk Menyesuaikan
+          </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col">
+        {/* HEADER DESKTOP */}
+        <div className="hidden md:block bg-blue-950 text-white p-5 border-b border-blue-800 flex-shrink-0">
+          <h1 className="text-xl font-bold leading-tight">Dashboard UCJ 2026</h1>
+          <p className="text-blue-300 text-sm mt-1">BPJS Ketenagakerjaan Medan</p>
+        </div>
+
+        {/* HEADER MOBILE */}
+        <div className="md:hidden bg-blue-950 text-white px-5 pb-4 border-b border-blue-800 flex-shrink-0 flex justify-between items-center">
+          <div>
+            <h1 className="text-lg font-bold leading-tight">Dashboard UCJ</h1>
+            <p className="text-blue-300 text-[10px] mt-0.5">BPJS Ketenagakerjaan Medan</p>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-gray-50 block">
           
           {level === 'kecamatan' && (
-            <div className="flex flex-col h-full">
-              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm z-10 flex-shrink-0">
+            <div className="animate-fadeIn">
+              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm">
                 <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 md:mb-3">Agregat Kota Medan</p>
                 <div className="grid grid-cols-3 gap-1 md:gap-2 mb-2 md:mb-3">
-                  <div className="border rounded p-1 md:p-2 text-center bg-gray-50">
+                  <div className="border rounded p-1.5 md:p-2 text-center bg-gray-50">
                     <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">KECAMATAN</p>
                     <p className="text-sm md:text-lg font-bold text-gray-800">21</p>
                   </div>
-                  <div className="border rounded p-1 md:p-2 text-center bg-gray-50">
+                  <div className="border rounded p-1.5 md:p-2 text-center bg-gray-50">
                     <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">KELURAHAN</p>
                     <p className="text-sm md:text-lg font-bold text-gray-800">151</p>
                   </div>
-                  <div className="border rounded p-1 md:p-2 text-center bg-gray-50">
+                  <div className="border rounded p-1.5 md:p-2 text-center bg-gray-50">
                     <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">LINGKUNGAN</p>
                     <p className="text-sm md:text-lg font-bold text-gray-800">2.001</p>
                   </div>
@@ -316,31 +397,31 @@ const Map = () => {
                 <div className="flex gap-1 md:gap-2 mb-2 md:mb-3">
                   <div className="flex-1 border rounded p-1.5 md:p-2">
                     <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
-                    <p className="text-sm md:text-lg font-bold text-gray-800">{aggKota.target.toLocaleString('id-ID')}</p>
+                    <p className="text-sm md:text-lg font-bold text-gray-800">100.050</p>
                   </div>
                   <div className="flex-1 border rounded p-1.5 md:p-2">
                     <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TOTAL AKUISISI</p>
-                    <p className="text-sm md:text-lg font-bold text-blue-600">{aggKota.capaian.toLocaleString('id-ID')}</p>
+                    <p className="text-sm md:text-lg font-bold text-blue-600">{totalAkuisisi.toLocaleString('id-ID')}</p>
                   </div>
                 </div>
                 <div className="border rounded p-2 md:p-3">
                    <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between">
                      <span>PERSENTASE</span>
-                     <span className={`text-sm md:text-lg font-bold ${aggKota.persentase >= 50 ? 'text-green-500' : 'text-red-500'}`}>
-                       {aggKota.persentase.toFixed(1)}%
+                     <span className={`text-sm md:text-lg font-bold ${((totalAkuisisi / 100050) * 100) >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                       {((totalAkuisisi / 100050) * 100).toFixed(1)}%
                      </span>
                    </p>
                    <div className="w-full bg-gray-200 rounded-full h-1.5 md:h-2 mt-1 md:mt-2">
-                      <div className={`h-1.5 md:h-2 rounded-full ${aggKota.persentase >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(aggKota.persentase, 100)}%` }}></div>
+                      <div className={`h-1.5 md:h-2 rounded-full ${((totalAkuisisi / 100050) * 100) >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(((totalAkuisisi / 100050) * 100), 100)}%` }}></div>
                    </div>
                 </div>
               </div>
 
-              <div className="p-3 md:p-4 flex-1 overflow-y-auto">
+              <div className="p-3 md:p-4 pb-8">
                 <h2 className="text-sm md:text-lg font-bold text-gray-800 mb-2">Pilih Kecamatan</h2>
                 <div className="space-y-2 mt-2">
                   {listKecamatan.map((kec, idx) => (
-                    <button key={idx} onClick={() => handleSelectKecamatanFromSidebar(kec.name, kec.bounds)} className="w-full text-left bg-white shadow-sm hover:bg-blue-50 border border-gray-100 p-2 md:p-3 rounded-lg text-xs md:text-sm font-semibold text-gray-700 hover:text-blue-700 transition">
+                    <button key={idx} onClick={() => handleSelectKecamatanFromSidebar(kec.name, kec.bounds)} className="w-full text-left bg-white shadow-sm hover:bg-blue-50 border border-gray-100 p-2.5 md:p-3 rounded-lg text-xs md:text-sm font-semibold text-gray-700 hover:text-blue-700 transition">
                       Kecamatan {kec.name}
                     </button>
                   ))}
@@ -350,8 +431,8 @@ const Map = () => {
           )}
 
           {level === 'kelurahan' && (
-            <div className="flex flex-col h-full">
-              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm z-10 flex-shrink-0">
+            <div className="animate-fadeIn">
+              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm">
                 <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 md:mb-3">Agregat Kec. {selectedKecamatan}</p>
                 <div className="flex gap-1 md:gap-2 mb-2 md:mb-3">
                   <div className="flex-1 border rounded p-1.5 md:p-2">
@@ -376,25 +457,29 @@ const Map = () => {
                 </div>
               </div>
 
-              <div className="p-3 md:p-4 flex flex-col flex-1">
-                <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mt-1 mb-3 text-xs md:text-sm shadow-sm">
+              <div className="p-3 md:p-4 pb-8">
+                <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mb-3 text-xs md:text-sm shadow-sm">
                   &larr; Kembali ke Peta Kota
                 </button>
                 <h2 className="text-sm md:text-lg font-bold text-gray-800 mb-2">Pilih Kelurahan</h2>
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                  {listKelurahan.map((kel, idx) => (
-                    <button key={idx} onClick={() => handleSelectKelurahanFromSidebar(kel.name, kel.bounds, kel.feature)} className="w-full text-left bg-white shadow-sm hover:bg-emerald-50 border border-emerald-100 p-2 md:p-3 rounded-lg text-xs md:text-sm font-semibold text-emerald-800 transition">
-                      Kel. {kel.name}
-                    </button>
-                  ))}
+                <div className="space-y-2">
+                  {displayKelurahans.length > 0 ? (
+                    displayKelurahans.map((kel, idx) => (
+                      <button key={idx} onClick={() => handleSelectKelurahanFromSidebar(kel.name, kel.bounds, kel.feature)} className="w-full text-left bg-white shadow-sm hover:bg-emerald-50 border border-emerald-100 p-2.5 md:p-3 rounded-lg text-xs md:text-sm font-semibold text-emerald-800 transition">
+                        Kel. {kel.name}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="text-center text-gray-400 text-xs py-4">Memuat data kelurahan...</p>
+                  )}
                 </div>
               </div>
             </div>
           )}
 
           {level === 'kepling' && (
-            <div className="flex flex-col h-full">
-              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm z-10 flex-shrink-0">
+            <div className="animate-fadeIn">
+              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm">
                 <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 md:mb-3">Agregat Kel. {selectedKelurahan}</p>
                 <div className="flex gap-1 md:gap-2 mb-2 md:mb-3">
                   <div className="flex-1 border rounded p-1.5 md:p-2">
@@ -419,15 +504,29 @@ const Map = () => {
                 </div>
               </div>
 
-              <div className="p-3 md:p-4 flex flex-col flex-1">
-                <button onClick={() => { setLevel('kelurahan'); setKeplingData([]); setSelectedKelurahan(null); }} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mt-1 mb-3 text-xs md:text-sm">
+              <div className="p-3 md:p-4 pb-8">
+                <button onClick={() => { setLevel('kelurahan'); setKeplingData([]); setSelectedKelurahan(null); }} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mb-3 text-xs md:text-sm">
                   &larr; Kembali ke Daftar Kelurahan
                 </button>
                 <h3 className="text-sm md:text-base font-bold text-gray-700 border-b pb-2 mb-3">Prioritas Tindak Lanjut:</h3>
                 
-                <div className="flex-1 overflow-y-auto pr-2 space-y-2 md:space-y-3 pb-4">
+                <div className="space-y-2 md:space-y-3">
                   {keplingData.map(kep => (
-                    <div key={kep.id} className="bg-white border border-gray-200 rounded-lg p-2 md:p-3 shadow-sm hover:shadow-md transition">
+                    // --- SIDEBAR KINI HANYA BERFUNGSI SEBAGAI PEMICU POPUP PETA ---
+                    <div 
+                      key={kep.id} 
+                      onClick={() => {
+                        // 1. Ambil referensi titik peta yang bersangkutan
+                        const marker = markerRefs.current[kep.id];
+                        if (marker) {
+                          // 2. Buka popup Leaflet-nya (Leaflet otomatis menutup popup yang lain!)
+                          marker.openPopup();
+                        }
+                        // 3. Turunkan panel sidebar agar pengguna bisa melihat popup di peta
+                        if (isMobile) setSheetHeight(15);
+                      }}
+                      className="bg-white border border-gray-200 rounded-lg p-2.5 md:p-3 shadow-sm hover:shadow-md hover:border-blue-400 hover:ring-1 hover:ring-blue-400 transition cursor-pointer"
+                    >
                       <div className="flex justify-between items-center mb-1">
                         <span className="text-xs md:text-sm font-bold text-gray-800">{kep.name}</span>
                         <span className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded ${kep.persentase >= 50 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{kep.persentase.toFixed(1)}%</span>
@@ -447,7 +546,6 @@ const Map = () => {
           )}
         </div>
       </div>
-
     </div>
   );
 };
