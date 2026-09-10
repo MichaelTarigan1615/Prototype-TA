@@ -35,15 +35,19 @@ const isPointInFeature = (pt: [number, number], feature: any) => {
   return false;
 };
 
-const MapController = ({ bounds, centerTo }: { bounds: any, centerTo: [number, number] | null }) => {
+// --- SOLUSI 1: Menambahkan invalidateSize untuk memperbaiki klik yang meleset ---
+const MapController = ({ bounds, centerTo, level }: { bounds: any, centerTo: [number, number] | null, level: string }) => {
   const map = useMap();
   useEffect(() => {
+    // Memaksa Leaflet melakukan kalibrasi ulang dimensi kanvas setelah animasi CSS selesai
+    setTimeout(() => { map.invalidateSize(); }, 300);
+    
     if (bounds) {
       map.flyToBounds(bounds, { duration: 1.5, maxZoom: 15 });
     } else if (centerTo) {
       map.flyTo(centerTo, 12, { duration: 1.5 });
     }
-  }, [bounds, centerTo, map]);
+  }, [bounds, centerTo, level, map]);
   return null;
 };
 
@@ -70,10 +74,7 @@ const Map = () => {
   const [mapBoundsTarget, setMapBoundsTarget] = useState<any>(null);
   const [mapCenterTarget, setMapCenterTarget] = useState<[number, number] | null>(null);
 
-  // --- SOLUSI: REF UNTUK MENGONTROL MARKER PETA DARI SIDEBAR ---
-  // Kita menyimpan seluruh referensi titik marker di dalam kamus ini
   const markerRefs = useRef<Record<number, any>>({});
-
   const [isMobile, setIsMobile] = useState(false);
   const [sheetHeight, setSheetHeight] = useState(35); 
   const [isDragging, setIsDragging] = useState(false);
@@ -221,6 +222,7 @@ const Map = () => {
   const validKelurahanNames = selectedKecamatan 
     ? Array.from(new Set(keplingMaster.filter(k => k.Kecamatan && k.Kecamatan.toUpperCase() === selectedKecamatan.toUpperCase()).map(k => k.Kelurahan.toUpperCase())))
     : [];
+  
   const displayKelurahans = listKelurahan.filter(kel => validKelurahanNames.includes(kel.name.toUpperCase()));
 
   const handleSelectKecamatanFromSidebar = (namaKec: string, bounds: any) => {
@@ -247,7 +249,9 @@ const Map = () => {
       <div className="w-full md:w-3/4 h-full relative bg-gray-100 z-0">
         <MapContainer center={defaultPosition} zoom={12} minZoom={11} maxBounds={medanBounds} maxBoundsViscosity={1.0} className="w-full h-full z-0 pb-16 md:pb-0">
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} />
+          
+          {/* Inject MapController with level trigger to fix resize bugs */}
+          <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} level={level} />
 
           {geoDataKecamatan && level === 'kecamatan' && (
             <GeoJSON 
@@ -262,15 +266,38 @@ const Map = () => {
                   });
                 });
                 layer.bindTooltip(namaKec, { direction: "center", className: "font-bold" });
-                layer.on({ click: (e) => { if (typeof e.target.getBounds === 'function') handleSelectKecamatanFromSidebar(namaKec, e.target.getBounds()); }});
+                
+                // --- SOLUSI 2: EFEK HOVER KECAMATAN ---
+                layer.on({
+                  mouseover: (e) => {
+                    const l = e.target;
+                    l.setStyle({ fillOpacity: 0.7, weight: 3, color: '#f8fafc' });
+                    l.bringToFront(); // Membawa polygon ke depan agar outline tidak terpotong
+                  },
+                  mouseout: (e) => {
+                    const l = e.target;
+                    l.setStyle({ fillOpacity: 0.4, weight: 2, color: 'white' });
+                  },
+                  click: (e) => { 
+                    if (typeof e.target.getBounds === 'function') handleSelectKecamatanFromSidebar(namaKec, e.target.getBounds()); 
+                  }
+                });
               }}
             />
           )}
 
+          {/* --- SOLUSI 3: ISOLASI KELURAHAN (HANYA RENDER KELURAHAN DARI KECAMATAN TERPILIH) --- */}
           {geoDataKelurahan && (level === 'kelurahan' || level === 'kepling') && (
             <GeoJSON 
-              key={`layer-kelurahan-${level}-${selectedKelurahan || 'semua'}`}
-              data={geoDataKelurahan} filter={filterPolygonsOnly} 
+              // Key yang spesifik memaksa Leaflet menghancurkan kelurahan kecamatan lain
+              key={`layer-kelurahan-${selectedKecamatan}-${selectedKelurahan || 'semua'}`}
+              data={geoDataKelurahan} 
+              filter={(feature: any) => {
+                if (!filterPolygonsOnly(feature)) return false;
+                // Hanya izinkan render jika kelurahan ini termasuk dalam array Kecamatan yang valid
+                const namaKel = (feature.properties.name || "").toUpperCase();
+                return validKelurahanNames.includes(namaKel);
+              }} 
               style={(feature: any) => {
                 const namaKel = feature.properties.name || "Kelurahan";
                 const isSelected = selectedKelurahan === namaKel;
@@ -286,7 +313,22 @@ const Map = () => {
                   });
                 });
                 layer.bindTooltip(`Kel. ${namaKel}`, { direction: "auto" });
+                
+                // --- SOLUSI 2: EFEK HOVER KELURAHAN ---
                 layer.on({
+                  mouseover: (e) => {
+                    if (levelRef.current === 'kelurahan') {
+                      const l = e.target;
+                      l.setStyle({ fillOpacity: 0.7, weight: 2, color: '#f8fafc' });
+                      l.bringToFront();
+                    }
+                  },
+                  mouseout: (e) => {
+                    if (levelRef.current === 'kelurahan') {
+                      const l = e.target;
+                      l.setStyle({ fillOpacity: 0.4, weight: 1, color: '#ffffff' });
+                    }
+                  },
                   click: (e) => {
                     if (typeof e.target.getBounds === 'function') handleSelectKelurahanFromSidebar(namaKel, e.target.getBounds(), feature);
                   }
@@ -298,14 +340,11 @@ const Map = () => {
           {level === 'kepling' && keplingData.map((kep) => (
             <CircleMarker 
               key={kep.id} center={[kep.lat, kep.lng]} radius={8} color="white" weight={2} fillColor={kep.persentase >= 50 ? '#10b981' : '#ef4444'} fillOpacity={1}
-              // Mendaftarkan marker ini ke dalam memori Referensi agar bisa dikendalikan dari Sidebar
-              ref={(ref) => {
-                if (ref) markerRefs.current[kep.id] = ref;
-              }}
+              ref={(ref) => { if (ref) markerRefs.current[kep.id] = ref; }}
               eventHandlers={{ 
                 click: (e) => {
                   e.originalEvent.stopPropagation();
-                  if (isMobile) setSheetHeight(15); // Turunkan sidebar otomatis agar popup peta terlihat jelas di HP
+                  if (isMobile) setSheetHeight(15); 
                 }
               }}
             >
@@ -319,7 +358,6 @@ const Map = () => {
                     {kep.persentase.toFixed(1)}% Terealisasi
                   </div>
 
-                  {/* DAFTAR PESERTA KINI HANYA MUNCUL DI DALAM POPUP PETA INI SAJA */}
                   <div className="mt-3 pt-2 border-t border-gray-200">
                     <p className="text-[10px] font-bold text-gray-500 mb-1">DAFTAR PESERTA ({kep.peserta?.length || 0}):</p>
                     <div className="max-h-36 overflow-y-auto border border-gray-200 rounded bg-gray-50 p-1 custom-scrollbar" onTouchStart={(e) => e.stopPropagation()}>
@@ -347,26 +385,19 @@ const Map = () => {
         className="w-full md:w-1/4 bg-blue-900 shadow-[0_-10px_40px_rgba(0,0,0,0.2)] md:shadow-2xl z-[1000] flex flex-col absolute md:relative bottom-0 right-0 rounded-t-3xl md:rounded-none"
         style={isMobile ? { height: `${sheetHeight}vh`, transition: isDragging ? 'none' : 'height 0.3s ease-out' } : { height: '100%' }}
       >
-        
-        {/* TUAS PENARIK (HANDLE) */}
         <div 
           className="md:hidden h-[48px] flex flex-col items-center justify-center bg-blue-950 rounded-t-3xl cursor-ns-resize flex-shrink-0 touch-none"
-          onMouseDown={startDrag}
-          onTouchStart={startDrag}
+          onMouseDown={startDrag} onTouchStart={startDrag}
         >
           <div className="w-12 h-1.5 bg-blue-300 rounded-full mb-1 opacity-80 pointer-events-none"></div>
-          <span className="text-blue-100 text-[10px] font-bold uppercase tracking-widest pointer-events-none">
-             Geser untuk Menyesuaikan
-          </span>
+          <span className="text-blue-100 text-[10px] font-bold uppercase tracking-widest pointer-events-none">Geser untuk Menyesuaikan</span>
         </div>
 
-        {/* HEADER DESKTOP */}
         <div className="hidden md:block bg-blue-950 text-white p-5 border-b border-blue-800 flex-shrink-0">
           <h1 className="text-xl font-bold leading-tight">Dashboard UCJ 2026</h1>
           <p className="text-blue-300 text-sm mt-1">BPJS Ketenagakerjaan Medan</p>
         </div>
 
-        {/* HEADER MOBILE */}
         <div className="md:hidden bg-blue-950 text-white px-5 pb-4 border-b border-blue-800 flex-shrink-0 flex justify-between items-center">
           <div>
             <h1 className="text-lg font-bold leading-tight">Dashboard UCJ</h1>
@@ -512,17 +543,11 @@ const Map = () => {
                 
                 <div className="space-y-2 md:space-y-3">
                   {keplingData.map(kep => (
-                    // --- SIDEBAR KINI HANYA BERFUNGSI SEBAGAI PEMICU POPUP PETA ---
                     <div 
                       key={kep.id} 
                       onClick={() => {
-                        // 1. Ambil referensi titik peta yang bersangkutan
                         const marker = markerRefs.current[kep.id];
-                        if (marker) {
-                          // 2. Buka popup Leaflet-nya (Leaflet otomatis menutup popup yang lain!)
-                          marker.openPopup();
-                        }
-                        // 3. Turunkan panel sidebar agar pengguna bisa melihat popup di peta
+                        if (marker) marker.openPopup();
                         if (isMobile) setSheetHeight(15);
                       }}
                       className="bg-white border border-gray-200 rounded-lg p-2.5 md:p-3 shadow-sm hover:shadow-md hover:border-blue-400 hover:ring-1 hover:ring-blue-400 transition cursor-pointer"
