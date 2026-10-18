@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, GeoJSON, CircleMarker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
 import Papa from 'papaparse';
 import 'leaflet/dist/leaflet.css';
 
@@ -37,7 +38,7 @@ const romanToInt = (romanStr: string): number => {
   return result || 999;
 };
 
-// --- NORMALISASI BARIS 'ALL KEPLING.csv' AGAR PAS 151 KELURAHAN & KONSISTEN ---
+// --- NORMALISASI BARIS 'ALL KEPLING.csv' AGAR PAS 151 KELURAHAN ---
 const normalizeKeplingRow = (row: any) => {
   let kec = (row.Kecamatan || '').trim();
   let kel = (row.Kelurahan || '').trim();
@@ -63,25 +64,37 @@ const normalizeKeplingRow = (row: any) => {
     ...row,
     Kecamatan: kec,
     Kelurahan: kel,
-    KelurahanAsliGeo: (row.Kelurahan || '').trim(),
     Nomor: nomor,
-    NomorAsli: (row.Nomor || '').trim(),
     KepalaLingkungan: kodeKepling,
     WilayahKey: `${kec}-${kel}-${nomor}`,
     LegacyWilayahKey: `${(row.Kecamatan || '').trim()}-${(row.Kelurahan || '').trim()}-${(row.Nomor || '').trim()}`
   };
 };
 
-// --- PENCOCOKAN NAMA KELURAHAN ANTARA CSV DAN GEOJSON ---
-const isKelurahanMatchGeo = (geoNameRaw: string, targetKelRaw: string): boolean => {
-  const g = (geoNameRaw || '').toUpperCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
-  const t = (targetKelRaw || '').toUpperCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!g || !t) return false;
-  if (g === t) return true;
-  // Fallback jika GeoJSON menggunakan nama tanpa akhiran I / II (misal SUKARAMAI vs SUKARAMAI I)
-  if (t.endsWith(' I') && g === t.slice(0, -2)) return true;
-  if (t.endsWith(' II') && g === t.slice(0, -3)) return true;
-  return false;
+// --- FUNGSI KANONIKAL UNTUK MENYATUKAN EJAAN CSV DAN GEOJSON (151 KELURAHAN COCOK 100%) ---
+const canonicalKelurahanName = (nameRaw: string): string => {
+  let s = (nameRaw || '').toUpperCase().trim();
+  s = s.replace(/PANDA\s+HULU/g, 'PANDAU HULU');
+  s = s.replace(/SUDIREJO\s*2/g, 'SUDIREJO II');
+  s = s.replace(/SUDIREJO\s*1/g, 'SUDIREJO I');
+  return s.replace(/[^A-Z0-9]/g, '');
+};
+
+const isFeatureMatchKelurahan = (feature: any, targetKelName: string, targetKecName?: string | null): boolean => {
+  if (!feature || !feature.properties) return false;
+  const geoName = feature.properties.name || '';
+  if (canonicalKelurahanName(geoName) !== canonicalKelurahanName(targetKelName)) {
+    return false;
+  }
+  // Jika ada nama kelurahan kembar beda kecamatan (seperti Sei Mati di Medan Labuhan vs Medan Maimun)
+  if (targetKecName && feature.properties.wikipedia) {
+    const wikiUpper = String(feature.properties.wikipedia).toUpperCase();
+    const kecUpper = targetKecName.toUpperCase().trim();
+    if (wikiUpper.includes('MEDAN ') && !wikiUpper.includes(kecUpper)) {
+      return false;
+    }
+  }
+  return true;
 };
 
 const isPointInPolygon = (point: [number, number], polygon: [number, number][]) => {
@@ -194,18 +207,61 @@ const getParticipantBadgeStyle = (status: StatusPeserta) => {
   };
 };
 
-const MapController = ({ bounds, centerTo, level }: { bounds: any, centerTo: [number, number] | null, level: string }) => {
+// --- PERBAIKAN UTAMA ANTI-GLITCH: MAP CONTROLLER TANPA KONFLIK ANIMASI & BUFFER LUAS ---
+const MapController = ({ bounds, centerTo }: { bounds: any, centerTo: [number, number] | null }) => {
   const map = useMap();
+  const prevTargetRef = useRef<string>('');
+
+  // Perluas buffer renderer bawaan agar poligon tidak pernah terpotong saat peta digeser cepat
   useEffect(() => {
-    setTimeout(() => { map.invalidateSize(); }, 300);
-    if (bounds) map.flyToBounds(bounds, { duration: 1.2, maxZoom: 15 });
-    else if (centerTo) map.flyTo(centerTo, 12, { duration: 1.2 });
-  }, [bounds, centerTo, level, map]);
+    const renderer = map.options.renderer as any;
+    if (renderer && renderer.options) {
+      renderer.options.padding = 1.0;
+    }
+    const timer = setTimeout(() => {
+      map.invalidateSize({ animate: false });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [map]);
+
+  // Gunakan fitBounds/setView yang menghentikan sisa transisi sebelumnya agar SVG/Canvas tetap presisi
+  useEffect(() => {
+    if (bounds) {
+      const targetKey = `bounds:${JSON.stringify(bounds)}`;
+      if (prevTargetRef.current !== targetKey) {
+        prevTargetRef.current = targetKey;
+        map.stop();
+        map.fitBounds(bounds, {
+          padding: [28, 28],
+          maxZoom: 15,
+          animate: true,
+          duration: 0.6
+        });
+      }
+    } else if (centerTo) {
+      const targetKey = `center:${centerTo[0]},${centerTo[1]}`;
+      if (prevTargetRef.current !== targetKey) {
+        prevTargetRef.current = targetKey;
+        map.stop();
+        map.setView(centerTo, 12, {
+          animate: true,
+          duration: 0.6
+        });
+      }
+    }
+  }, [bounds, centerTo, map]);
+
   return null;
 };
 
 const Map = () => {
   const defaultPosition: [number, number] = [3.5952, 98.6722];
+
+  // Custom Canvas Renderer dengan padding 1.0 (menggambar hingga 100% di luar layar agar tidak pernah terpotong)
+  const canvasRenderer = useMemo(() => {
+    if (typeof window === 'undefined') return undefined;
+    return L.canvas({ padding: 1.0 });
+  }, []);
 
   const [isHeuristic, setIsHeuristic] = useState<boolean>(true);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
@@ -338,8 +394,6 @@ const Map = () => {
     });
   }, []);
 
-  // --- PRE-KALKULASI STATISTIK MENGGUNAKAN KUNCI UNIK (KECAMATAN + KELURAHAN) ---
-  // Mencegah tabrakan nama Kelurahan SEI MATI di Medan Labuhan vs Medan Maimun
   const statsMap = useMemo(() => {
     const kecMap: Record<string, AggregateStat> = {};
     const kelMap: Record<string, AggregateStat> = {};
@@ -347,10 +401,9 @@ const Map = () => {
     keplingMaster.forEach((k) => {
       if (!k.Kecamatan || !k.Kelurahan) return;
       const kecKey = k.Kecamatan.toUpperCase();
-      const kelCompositeKey = `${k.Kecamatan.toUpperCase()}__${k.Kelurahan.toUpperCase()}`;
-      const kelNameOnlyKey = k.Kelurahan.toUpperCase();
+      const kelCompositeKey = `${k.Kecamatan.toUpperCase()}__${canonicalKelurahanName(k.Kelurahan)}`;
+      const kelNameOnlyKey = canonicalKelurahanName(k.Kelurahan);
 
-      // Membaca baik format Wilayah baru maupun format Legacy sebelum generate_dummy.js dijalankan ulang
       const st = keplingStats[k.WilayahKey] || keplingStats[k.LegacyWilayahKey] || { total: 0, aktif: 0, menunggak: 0, tidakAktif: 0 };
 
       if (!kecMap[kecKey]) kecMap[kecKey] = { target: 0, capaian: 0, persentase: 0, aktif: 0, menunggak: 0, tidakAktif: 0, jmlLingkungan: 0 };
@@ -369,7 +422,6 @@ const Map = () => {
       kelMap[kelCompositeKey].tidakAktif += st.tidakAktif;
       kelMap[kelCompositeKey].jmlLingkungan += 1;
 
-      // Simpan juga fallback berdasarkan nama kelurahan
       if (!kelMap[kelNameOnlyKey]) kelMap[kelNameOnlyKey] = kelMap[kelCompositeKey];
     });
 
@@ -390,11 +442,12 @@ const Map = () => {
       return statsMap.kecMap[name.toUpperCase()] || emptyAgg;
     }
     if (type === 'kelurahan' && name) {
+      const cKel = canonicalKelurahanName(name);
       if (kecContext) {
-        const compKey = `${kecContext.toUpperCase()}__${name.toUpperCase()}`;
+        const compKey = `${kecContext.toUpperCase()}__${cKel}`;
         if (statsMap.kelMap[compKey]) return statsMap.kelMap[compKey];
       }
-      return statsMap.kelMap[name.toUpperCase()] || emptyAgg;
+      return statsMap.kelMap[cKel] || emptyAgg;
     }
     const targetKota = 100050;
     return {
@@ -412,14 +465,16 @@ const Map = () => {
   const aggKec = selectedKecamatan ? getAggregate('kecamatan', selectedKecamatan) : emptyAgg;
   const aggKel = selectedKelurahan ? getAggregate('kelurahan', selectedKelurahan, selectedKecamatan) : emptyAgg;
 
-  const findKelurahanFeature = (kelName: string) => {
+  const findKelurahanFeature = (kelName: string, kecName?: string | null) => {
     if (!geoDataKelurahan?.features) return null;
-    return geoDataKelurahan.features.find((f: any) =>
-      isKelurahanMatchGeo(f.properties?.name || '', kelName)
+    const activeKec = kecName || selectedKecamatan;
+    return (
+      geoDataKelurahan.features.find((f: any) => isFeatureMatchKelurahan(f, kelName, activeKec)) ||
+      geoDataKelurahan.features.find((f: any) => isFeatureMatchKelurahan(f, kelName, null))
     );
   };
 
-  // --- MESIN PENCARI GLOBAL (KELURAHAN, KODE KEPLING, NAMA WARGA, ATAU NIK) ---
+  // --- MESIN PENCARI GLOBAL ---
   useEffect(() => {
     if (searchQuery.length < 3) {
       setSearchResults([]);
@@ -428,25 +483,27 @@ const Map = () => {
     const q = searchQuery.toLowerCase();
     const results: any[] = [];
 
-    // 1. Cari Kelurahan (menyertakan konteks Kecamatan agar SEI MATI tidak tertukar)
-    const uniqueKelPairs = Array.from(
-      new Map(keplingMaster.map(k => [`${k.Kecamatan}__${k.Kelurahan}`, { kec: k.Kecamatan, kel: k.Kelurahan }])).values()
-    );
+    const uniqueKelMap = new globalThis.Map<string, { kec: string; kel: string }>();
+    keplingMaster.forEach((k) => {
+      if (k.Kecamatan && k.Kelurahan) {
+        uniqueKelMap.set(`${k.Kecamatan}__${k.Kelurahan}`, { kec: String(k.Kecamatan), kel: String(k.Kelurahan) });
+      }
+    });
+    const uniqueKelPairs = Array.from(uniqueKelMap.values());
     const matchedKels = uniqueKelPairs
-      .filter(item => item.kel.toLowerCase().includes(q))
+      .filter((item) => item.kel.toLowerCase().includes(q))
       .slice(0, 3);
 
-    matchedKels.forEach(item => {
-      const feature = findKelurahanFeature(item.kel);
+    matchedKels.forEach((item) => {
+      const feature = findKelurahanFeature(item.kel, item.kec);
       if (feature) results.push({ type: 'kelurahan', data: { name: item.kel, kecamatan: item.kec, feature } });
     });
 
-    // 2. Cari Peserta (Nama TK atau NIK)
-    const matchedPeserta = csvData.filter(p => 
-      (p['Nama TK'] && p['Nama TK'].toLowerCase().includes(q)) || 
+    const matchedPeserta = csvData.filter((p) => 
+      (p['Nama TK'] && String(p['Nama TK']).toLowerCase().includes(q)) || 
       (p.NIK && String(p.NIK).includes(q))
     ).slice(0, 5);
-    matchedPeserta.forEach(p => results.push({ type: 'peserta', data: p }));
+    matchedPeserta.forEach((p) => results.push({ type: 'peserta', data: p }));
 
     setSearchResults(results);
   }, [searchQuery, csvData, geoDataKelurahan, keplingMaster]);
@@ -463,23 +520,24 @@ const Map = () => {
       setAnswerCard(null); 
     } else if (result.type === 'peserta') {
       const p = result.data;
-      const parts = p.Wilayah.split('-');
+      const parts = String(p.Wilayah || '').split('-');
       if (parts.length >= 3) {
         const kec = parts[0];
         const kel = parts[1];
         const ling = parts.slice(2).join('-');
         const masterMatch = keplingMaster.find(
-          k => k.WilayahKey === p.Wilayah || k.LegacyWilayahKey === p.Wilayah
+          (k) => k.WilayahKey === p.Wilayah || k.LegacyWilayahKey === p.Wilayah
         );
         const targetKelName = masterMatch ? masterMatch.Kelurahan : kel;
+        const targetKecName = masterMatch ? masterMatch.Kecamatan : kec;
         const kodeKepling = masterMatch ? masterMatch.KepalaLingkungan : (p.Kode_Kepling || p.Wilayah);
-        const feature = findKelurahanFeature(targetKelName);
+        const feature = findKelurahanFeature(targetKelName, targetKecName);
         
         if (feature) {
           const bounds = getBoundsArray(feature);
-          setSelectedKecamatan(kec);
-          handleSelectKelurahanFromSidebar(targetKelName, bounds, feature, kec);
-          setAnswerCard({ ...p, Kecamatan: kec, Kelurahan: targetKelName, Lingkungan: masterMatch ? masterMatch.Nomor : ling, KodeKepling: kodeKepling });
+          setSelectedKecamatan(targetKecName);
+          handleSelectKelurahanFromSidebar(targetKelName, bounds, feature, targetKecName);
+          setAnswerCard({ ...p, Kecamatan: targetKecName, Kelurahan: targetKelName, Lingkungan: masterMatch ? masterMatch.Nomor : ling, KodeKepling: kodeKepling });
           if (isMobile) setSheetHeight(20);
         }
       }
@@ -498,7 +556,7 @@ const Map = () => {
   const generateKeplingData = (boundsArr: [[number, number], [number, number]], kelurahanName: string, feature: any, kecName?: string | null) => {
     const activeKec = kecName || selectedKecamatan;
     const realKeplings = keplingMaster.filter((row) => 
-      row.Kelurahan.toUpperCase() === kelurahanName.toUpperCase() &&
+      canonicalKelurahanName(row.Kelurahan) === canonicalKelurahanName(kelurahanName) &&
       (!activeKec || row.Kecamatan.toUpperCase() === activeKec.toUpperCase())
     );
 
@@ -539,7 +597,7 @@ const Map = () => {
           nomorRomawi: row.Nomor,
           nomorUrut: romanToInt(row.Nomor),
           name: `Lingkungan ${row.Nomor}`,
-          kodeKepling: row.KepalaLingkungan, // Dari kolom ke-5 ALL KEPLING.csv
+          kodeKepling: row.KepalaLingkungan,
           lat,
           lng,
           target,
@@ -553,17 +611,17 @@ const Map = () => {
       }
     });
 
-    if (Object.keys(newMemoryUpdates).length > 0) setKeplingMemory(prev => ({ ...prev, ...newMemoryUpdates }));
+    if (Object.keys(newMemoryUpdates).length > 0) setKeplingMemory((prev) => ({ ...prev, ...newMemoryUpdates }));
     setKeplingData(data);
   };
 
-  const rawKecamatanNames = useMemo(() => Array.from(new Set(keplingMaster.map(k => k.Kecamatan).filter(Boolean))), [keplingMaster]);
+  const rawKecamatanNames = useMemo(() => Array.from(new Set(keplingMaster.map((k) => String(k.Kecamatan)).filter(Boolean))), [keplingMaster]);
   const rawKelurahanNames = useMemo(() => {
     if (!selectedKecamatan) return [];
     return Array.from(new Set(
       keplingMaster
-        .filter(k => k.Kecamatan.toUpperCase() === selectedKecamatan.toUpperCase())
-        .map(k => k.Kelurahan)
+        .filter((k) => String(k.Kecamatan).toUpperCase() === selectedKecamatan.toUpperCase())
+        .map((k) => String(k.Kelurahan))
         .filter(Boolean)
     ));
   }, [keplingMaster, selectedKecamatan]);
@@ -601,14 +659,15 @@ const Map = () => {
 
   const handleSelectKecamatanFromSidebar = (namaKec: string, bounds: any) => {
     setLevel('kelurahan'); setSelectedKecamatan(namaKec); setSelectedKelurahan(null);
-    setMapBoundsTarget(bounds); setKeplingData([]); setAnswerCard(null);
+    setMapBoundsTarget(bounds); setMapCenterTarget(null); setKeplingData([]); setAnswerCard(null);
     if (isMobile) setSheetHeight(45); 
   };
 
   const handleSelectKelurahanFromSidebar = (namaKel: string, bounds: any, feature: any, kecOverride?: string) => {
     const activeKec = kecOverride || selectedKecamatan;
     setLevel('kepling'); setSelectedKelurahan(namaKel); setPopupStatusFilter('ALL');
-    setMapBoundsTarget(bounds); generateKeplingData(bounds, namaKel, feature, activeKec); setAnswerCard(null);
+    setMapBoundsTarget(bounds); setMapCenterTarget(null);
+    generateKeplingData(bounds, namaKel, feature, activeKec); setAnswerCard(null);
     if (isMobile) setSheetHeight(45);
   };
 
@@ -621,7 +680,10 @@ const Map = () => {
       const kecFeature = geoDataKecamatan.features.find(
         (f: any) => f.properties?.name?.toUpperCase() === selectedKecamatan.toUpperCase()
       );
-      if (kecFeature) setMapBoundsTarget(getBoundsArray(kecFeature));
+      if (kecFeature) {
+        setMapBoundsTarget(getBoundsArray(kecFeature));
+        setMapCenterTarget(null);
+      }
     }
   };
 
@@ -779,11 +841,20 @@ const Map = () => {
           </div>
         )}
 
-        <MapContainer center={defaultPosition} zoom={12} minZoom={11} maxBounds={medanBounds} maxBoundsViscosity={1.0} className="w-full h-full z-0 pb-16 md:pb-0">
+        <MapContainer
+          center={defaultPosition}
+          zoom={12}
+          minZoom={11}
+          maxBounds={medanBounds}
+          maxBoundsViscosity={1.0}
+          preferCanvas={true}
+          renderer={canvasRenderer}
+          className="w-full h-full z-0 pb-16 md:pb-0"
+        >
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} level={level} />
+          <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} />
 
-          {/* LAYER KECAMATAN */}
+          {/* LAYER 1: KECAMATAN */}
           {geoDataKecamatan && level === 'kecamatan' && (
             <GeoJSON 
               key={`layer-kecamatan-${isHeuristic ? 'heuristik' : 'baseline'}-${kotaSummary.total}`}
@@ -815,7 +886,6 @@ const Map = () => {
                   mouseover: (e) => {
                     const l = e.target;
                     l.setStyle({ fillOpacity: 0.8, weight: 3, color: '#1e293b' });
-                    l.bringToFront();
                   },
                   mouseout: (e) => {
                     const l = e.target;
@@ -830,40 +900,39 @@ const Map = () => {
             />
           )}
 
-          {/* LAYER KELURAHAN */}
+          {/* LAYER 2: KELURAHAN (SAAT LEVEL KELURAHAN ATAU KEPLING) */}
           {geoDataKelurahan && (level === 'kelurahan' || level === 'kepling') && (
             <GeoJSON 
-              key={`layer-kelurahan-${isHeuristic ? 'heuristik' : 'baseline'}-${selectedKecamatan}-${selectedKelurahan || 'semua'}`}
+              key={`layer-kelurahan-${isHeuristic ? 'heuristik' : 'baseline'}-${selectedKecamatan}-${level === 'kepling' ? selectedKelurahan : 'all'}`}
               data={geoDataKelurahan} 
               filter={(feature: any) => {
                 if (!filterPolygonsOnly(feature)) return false;
-                const geoName = feature.properties.name || "";
-                return rawKelurahanNames.some(kel => isKelurahanMatchGeo(geoName, kel));
+                if (level === 'kepling' && selectedKelurahan) {
+                  return isFeatureMatchKelurahan(feature, selectedKelurahan, selectedKecamatan);
+                }
+                return rawKelurahanNames.some((kel) => isFeatureMatchKelurahan(feature, kel, selectedKecamatan));
               }} 
               style={(feature: any) => {
-                const geoName = feature.properties.name || "Kelurahan";
-                const matchedKelName = rawKelurahanNames.find(kel => isKelurahanMatchGeo(geoName, kel)) || geoName;
-                const isSelected = selectedKelurahan && isKelurahanMatchGeo(geoName, selectedKelurahan);
+                const matchedKelName = rawKelurahanNames.find((kel) => isFeatureMatchKelurahan(feature, kel, selectedKecamatan)) || feature.properties.name || "Kelurahan";
                 const stat = getAggregate('kelurahan', matchedKelName, selectedKecamatan);
                 const statusColor = getStatusColor(stat.persentase);
 
                 if (level === 'kepling') {
                   const activeColor = isHeuristic ? statusColor.hex : "#10b981";
                   return {
-                    fillColor: isSelected ? activeColor : "transparent",
-                    weight: isSelected ? 2.5 : 0,
-                    color: isSelected ? '#ffffff' : 'transparent',
-                    fillOpacity: isSelected ? 0.35 : 0
+                    fillColor: activeColor,
+                    weight: 2.5,
+                    color: '#ffffff',
+                    fillOpacity: 0.35
                   };
                 }
                 if (!isHeuristic) {
-                  return { fillColor: "#38bdf8", weight: 1, color: '#ffffff', fillOpacity: 0.4 };
+                  return { fillColor: "#38bdf8", weight: 1.5, color: '#ffffff', fillOpacity: 0.4 };
                 }
                 return { fillColor: statusColor.hex, weight: 1.5, color: '#ffffff', fillOpacity: 0.55 };
               }}
               onEachFeature={(feature, layer) => {
-                const geoName = feature.properties.name || "Kelurahan";
-                const matchedKelName = rawKelurahanNames.find(kel => isKelurahanMatchGeo(geoName, kel)) || geoName;
+                const matchedKelName = rawKelurahanNames.find((kel) => isFeatureMatchKelurahan(feature, kel, selectedKecamatan)) || feature.properties.name || "Kelurahan";
                 const stat = getAggregate('kelurahan', matchedKelName, selectedKecamatan);
                 const tooltipContent = isHeuristic
                   ? `<div class="text-center">
@@ -873,31 +942,28 @@ const Map = () => {
                     </div>`
                   : `Kel. ${matchedKelName}`;
 
-                layer.bindTooltip(tooltipContent, { direction: "auto" });
-                layer.on({
-                  mouseover: (e) => {
-                    if (levelRef.current === 'kelurahan') {
+                if (level === 'kelurahan') {
+                  layer.bindTooltip(tooltipContent, { direction: "auto" });
+                  layer.on({
+                    mouseover: (e) => {
                       const l = e.target;
                       l.setStyle({ fillOpacity: 0.8, weight: 2.5, color: '#1e293b' });
-                      l.bringToFront();
-                    }
-                  },
-                  mouseout: (e) => {
-                    if (levelRef.current === 'kelurahan') {
+                    },
+                    mouseout: (e) => {
                       const l = e.target;
                       l.setStyle({ fillOpacity: isHeuristic ? 0.55 : 0.4, weight: 1.5, color: '#ffffff' });
+                    },
+                    click: () => {
+                      const boundsArr = getBoundsArray(feature);
+                      handleSelectKelurahanFromSidebar(matchedKelName, boundsArr, feature);
                     }
-                  },
-                  click: () => {
-                    const boundsArr = getBoundsArray(feature);
-                    handleSelectKelurahanFromSidebar(matchedKelName, boundsArr, feature);
-                  }
-                });
+                  });
+                }
               }}
             />
           )}
 
-          {/* LAYER TITIK LINGKUNGAN / KEPLING */}
+          {/* LAYER 3: TITIK LINGKUNGAN / KEPLING */}
           {level === 'kepling' && sortedKeplingData.map((kep) => {
             const statusColor = getStatusColor(kep.persentase);
             const markerColor = isHeuristic ? statusColor.hex : (kep.persentase >= 50 ? '#10b981' : '#ef4444');
@@ -938,7 +1004,6 @@ const Map = () => {
                       {kep.persentase.toFixed(1)}% Terealisasi
                     </div>
 
-                    {/* FILTER CEPAT STATUS PESERTA UNTUK KEPALA LINGKUNGAN */}
                     {isHeuristic && (
                       <div className="mt-2.5 pt-2 border-t border-gray-200" onClick={(e) => e.stopPropagation()}>
                         <p className="text-[10px] font-bold text-gray-500 mb-1 uppercase">Filter Status Warga:</p>
@@ -1337,7 +1402,7 @@ const Map = () => {
                         <button 
                           key={idx} 
                           onClick={() => {
-                            const feature = findKelurahanFeature(kel);
+                            const feature = findKelurahanFeature(kel, selectedKecamatan);
                             const bounds = getBoundsArray(feature);
                             handleSelectKelurahanFromSidebar(kel, bounds, feature);
                           }} 
@@ -1437,7 +1502,7 @@ const Map = () => {
                 </div>
                 
                 <div className="space-y-2 md:space-y-3">
-                  {sortedKeplingData.map(kep => {
+                  {sortedKeplingData.map((kep) => {
                     const statusColor = getStatusColor(kep.persentase);
                     return (
                       <div 
