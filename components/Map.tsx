@@ -86,7 +86,6 @@ const isFeatureMatchKelurahan = (feature: any, targetKelName: string, targetKecN
   if (canonicalKelurahanName(geoName) !== canonicalKelurahanName(targetKelName)) {
     return false;
   }
-  // Jika ada nama kelurahan kembar beda kecamatan (seperti Sei Mati di Medan Labuhan vs Medan Maimun)
   if (targetKecName && feature.properties.wikipedia) {
     const wikiUpper = String(feature.properties.wikipedia).toUpperCase();
     const kecUpper = targetKecName.toUpperCase().trim();
@@ -207,12 +206,21 @@ const getParticipantBadgeStyle = (status: StatusPeserta) => {
   };
 };
 
-// --- PERBAIKAN UTAMA ANTI-GLITCH: MAP CONTROLLER TANPA KONFLIK ANIMASI & BUFFER LUAS ---
-const MapController = ({ bounds, centerTo }: { bounds: any, centerTo: [number, number] | null }) => {
+// --- MAP CONTROLLER PINTAR: MENYESUAIKAN TITIK TENGAH PETA DENGAN TINGGI BOTTOM SHEET DI HP ---
+const MapController = ({
+  bounds,
+  centerTo,
+  isMobile,
+  sheetHeight
+}: {
+  bounds: any;
+  centerTo: [number, number] | null;
+  isMobile: boolean;
+  sheetHeight: number;
+}) => {
   const map = useMap();
   const prevTargetRef = useRef<string>('');
 
-  // Perluas buffer renderer bawaan agar poligon tidak pernah terpotong saat peta digeser cepat
   useEffect(() => {
     const renderer = map.options.renderer as any;
     if (renderer && renderer.options) {
@@ -224,15 +232,21 @@ const MapController = ({ bounds, centerTo }: { bounds: any, centerTo: [number, n
     return () => clearTimeout(timer);
   }, [map]);
 
-  // Gunakan fitBounds/setView yang menghentikan sisa transisi sebelumnya agar SVG/Canvas tetap presisi
   useEffect(() => {
     if (bounds) {
-      const targetKey = `bounds:${JSON.stringify(bounds)}`;
+      const targetKey = `bounds:${JSON.stringify(bounds)}:${isMobile ? 'm' : 'd'}`;
       if (prevTargetRef.current !== targetKey) {
         prevTargetRef.current = targetKey;
         map.stop();
+
+        // Di ponsel, tambahkan padding bawah sesuai tinggi bottom sheet agar wilayah tidak tertutup panel
+        const bottomOffset = isMobile && typeof window !== 'undefined'
+          ? Math.min(Math.round((window.innerHeight * Math.min(sheetHeight, 48)) / 100) + 24, window.innerHeight * 0.52)
+          : 28;
+
         map.fitBounds(bounds, {
-          padding: [28, 28],
+          paddingTopLeft: [20, isMobile ? 56 : 28],
+          paddingBottomRight: [20, bottomOffset],
           maxZoom: 15,
           animate: true,
           duration: 0.6
@@ -243,13 +257,13 @@ const MapController = ({ bounds, centerTo }: { bounds: any, centerTo: [number, n
       if (prevTargetRef.current !== targetKey) {
         prevTargetRef.current = targetKey;
         map.stop();
-        map.setView(centerTo, 12, {
+        map.setView(centerTo, isMobile ? 11 : 12, {
           animate: true,
           duration: 0.6
         });
       }
     }
-  }, [bounds, centerTo, map]);
+  }, [bounds, centerTo, isMobile, sheetHeight, map]);
 
   return null;
 };
@@ -257,7 +271,6 @@ const MapController = ({ bounds, centerTo }: { bounds: any, centerTo: [number, n
 const Map = () => {
   const defaultPosition: [number, number] = [3.5952, 98.6722];
 
-  // Custom Canvas Renderer dengan padding 1.0 (menggambar hingga 100% di luar layar agar tidak pernah terpotong)
   const canvasRenderer = useMemo(() => {
     if (typeof window === 'undefined') return undefined;
     return L.canvas({ padding: 1.0 });
@@ -265,6 +278,7 @@ const Map = () => {
 
   const [isHeuristic, setIsHeuristic] = useState<boolean>(true);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
+  const [isLegendOpen, setIsLegendOpen] = useState<boolean>(true); // Bisa dilipat di layar HP
   const [sortBy, setSortBy] = useState<'menunggak' | 'asc' | 'desc' | 'alpha'>('menunggak');
   const [popupStatusFilter, setPopupStatusFilter] = useState<'ALL' | StatusPeserta>('ALL');
 
@@ -288,7 +302,7 @@ const Map = () => {
 
   const markerRefs = useRef<Record<number, any>>({});
   const [isMobile, setIsMobile] = useState(false);
-  const [sheetHeight, setSheetHeight] = useState(35); 
+  const [sheetHeight, setSheetHeight] = useState(42); 
   const [isDragging, setIsDragging] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -296,7 +310,13 @@ const Map = () => {
   const [answerCard, setAnswerCard] = useState<any>(null);
 
   useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      // Di layar ponsel, legenda otomatis dibuat ringkas (tertutup) di awal agar peta lega
+      if (mobile) setIsLegendOpen(false);
+      else setIsLegendOpen(true);
+    };
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
@@ -309,7 +329,7 @@ const Map = () => {
       if (!isDragging) return;
       const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
       const vh = ((window.innerHeight - clientY) / window.innerHeight) * 100;
-      if (vh >= 15 && vh <= 85) setSheetHeight(vh);
+      if (vh >= 18 && vh <= 86) setSheetHeight(vh);
     };
     const onEnd = () => setIsDragging(false);
 
@@ -538,7 +558,7 @@ const Map = () => {
           setSelectedKecamatan(targetKecName);
           handleSelectKelurahanFromSidebar(targetKelName, bounds, feature, targetKecName);
           setAnswerCard({ ...p, Kecamatan: targetKecName, Kelurahan: targetKelName, Lingkungan: masterMatch ? masterMatch.Nomor : ling, KodeKepling: kodeKepling });
-          if (isMobile) setSheetHeight(20);
+          if (isMobile) setSheetHeight(22);
         }
       }
     }
@@ -690,26 +710,27 @@ const Map = () => {
   const handleResetToCity = () => {
     setLevel('kecamatan'); setSelectedKecamatan(null); setSelectedKelurahan(null);
     setMapBoundsTarget(null); setMapCenterTarget([...defaultPosition]); setKeplingData([]); setAnswerCard(null);
+    if (isMobile) setSheetHeight(40);
   };
 
   const renderStatusBreakdown = (agg: AggregateStat) => {
     if (!isHeuristic) return null;
     return (
       <div className="mt-2 pt-2 border-t border-gray-100">
-        <p className="text-[9px] md:text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+        <p className="text-[9px] md:text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">
           Rincian Status Kepesertaan Wilayah Ini
         </p>
         <div className="grid grid-cols-3 gap-1.5">
-          <div className="bg-emerald-50 border border-emerald-200 rounded p-1.5 text-center">
-            <p className="text-[9px] font-bold text-emerald-700">🟢 AKTIF</p>
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-1 md:p-1.5 text-center">
+            <p className="text-[8px] md:text-[9px] font-bold text-emerald-700">🟢 AKTIF</p>
             <p className="text-xs md:text-sm font-bold text-emerald-800">{agg.aktif.toLocaleString('id-ID')}</p>
           </div>
-          <div className="bg-amber-50 border border-amber-200 rounded p-1.5 text-center">
-            <p className="text-[9px] font-bold text-amber-700">🟡 MENUNGGAK</p>
+          <div className="bg-amber-50 border border-amber-200 rounded p-1 md:p-1.5 text-center">
+            <p className="text-[8px] md:text-[9px] font-bold text-amber-700">🟡 MENUNGGAK</p>
             <p className="text-xs md:text-sm font-bold text-amber-800">{agg.menunggak.toLocaleString('id-ID')}</p>
           </div>
-          <div className="bg-red-50 border border-red-200 rounded p-1.5 text-center">
-            <p className="text-[9px] font-bold text-red-700">🔴 NON-AKTIF</p>
+          <div className="bg-red-50 border border-red-200 rounded p-1 md:p-1.5 text-center">
+            <p className="text-[8px] md:text-[9px] font-bold text-red-700">🔴 NON-AKTIF</p>
             <p className="text-xs md:text-sm font-bold text-red-800">{agg.tidakAktif.toLocaleString('id-ID')}</p>
           </div>
         </div>
@@ -723,115 +744,153 @@ const Map = () => {
       {/* --- AREA PETA --- */}
       <div className="w-full md:w-3/4 h-full relative bg-gray-100 z-0">
 
-        {/* SWITCHER MODE EVALUASI SKRIPSI */}
-        <div className="absolute top-3 left-14 z-[1000] bg-white/95 backdrop-blur shadow-md rounded-lg p-1.5 border border-gray-200 flex items-center gap-1.5 text-xs">
-          <span className="font-bold text-gray-600 px-1.5 hidden sm:inline">Mode Evaluasi:</span>
-          <button
-            onClick={() => setIsHeuristic(true)}
-            className={`px-2.5 py-1 rounded-md font-bold transition ${
-              isHeuristic ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            ✨ Heuristic-Based
-          </button>
-          <button
-            onClick={() => setIsHeuristic(false)}
-            className={`px-2.5 py-1 rounded-md font-bold transition ${
-              !isHeuristic ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            Baseline (Non-Heuristik)
-          </button>
-        </div>
+        {/* BAR KONTROL ATAS RESPONSIF (TIDAK SALING MENIMPA DI LAYAR PONSEL) */}
+        <div className="absolute top-2.5 left-12 right-2.5 z-[1000] flex items-center justify-between gap-1.5 pointer-events-none">
+          {/* Switcher Mode Evaluasi */}
+          <div className="bg-white/95 backdrop-blur shadow-md rounded-lg p-1 border border-gray-200 flex items-center gap-1 text-[11px] md:text-xs pointer-events-auto">
+            <span className="font-bold text-gray-600 px-1.5 hidden lg:inline">Mode Evaluasi:</span>
+            <button
+              onClick={() => setIsHeuristic(true)}
+              className={`px-2 md:px-2.5 py-1 rounded-md font-bold transition whitespace-nowrap ${
+                isHeuristic ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              ✨ <span className="hidden sm:inline">Heuristic-Based</span><span className="sm:hidden">Heuristik</span>
+            </button>
+            <button
+              onClick={() => setIsHeuristic(false)}
+              className={`px-2 md:px-2.5 py-1 rounded-md font-bold transition whitespace-nowrap ${
+                !isHeuristic ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              Baseline <span className="hidden sm:inline">(Non-Heuristik)</span>
+            </button>
+          </div>
 
-        {/* H3: TOMBOL RESET TAMPILAN PETA */}
-        {isHeuristic && (level !== 'kecamatan' || answerCard) && (
-          <button
-            onClick={handleResetToCity}
-            className="absolute top-3 right-3 z-[1000] bg-white hover:bg-blue-50 text-blue-800 font-bold text-xs px-3 py-2 rounded-lg shadow-md border border-blue-200 flex items-center gap-1.5 transition"
-          >
-            <span>🔄</span> Reset Peta Kota
-          </button>
-        )}
+          {/* H3: Tombol Reset Tampilan Peta */}
+          {isHeuristic && (level !== 'kecamatan' || answerCard) && (
+            <button
+              onClick={handleResetToCity}
+              className="bg-white/95 backdrop-blur hover:bg-blue-50 text-blue-800 font-bold text-[11px] md:text-xs px-2.5 py-1.5 rounded-lg shadow-md border border-blue-200 flex items-center gap-1 transition pointer-events-auto whitespace-nowrap"
+            >
+              <span>🔄</span>
+              <span className="hidden sm:inline">Reset Peta Kota</span>
+              <span className="sm:hidden">Reset</span>
+            </button>
+          )}
+        </div>
 
         {/* H1: INDIKATOR MUAT DATA */}
         {isHeuristic && isLoadingData && (
-          <div className="absolute inset-0 z-[1001] bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center">
+          <div className="absolute inset-0 z-[1001] bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center px-4 text-center">
             <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
             <p className="text-sm font-bold text-gray-800">Memuat Master Kepling & Data Kepesertaan...</p>
             <p className="text-xs text-gray-500 mt-1">21 Kecamatan • 151 Kelurahan • 2.001 Kepala Lingkungan</p>
           </div>
         )}
 
-        {/* H1, H2, H6: LEGENDA PETA */}
+        {/* H1, H2, H6, H8: LEGENDA PETA COLLAPSIBLE & MENGIKUTI TINGGI BOTTOM SHEET DI PONSEL */}
         {isHeuristic && (
-          <div className="absolute bottom-20 md:bottom-6 left-3 z-[1000] bg-white/95 backdrop-blur p-3 rounded-xl shadow-lg border border-gray-200 text-xs w-56">
-            <p className="font-bold text-gray-800 mb-1.5 text-[11px] uppercase tracking-wider border-b pb-1">
-              Legenda Peta & Status
-            </p>
-            <p className="text-[10px] font-semibold text-gray-500 mb-1">Capaian Akuisisi Wilayah:</p>
-            <div className="space-y-1 mb-2">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-sm bg-emerald-500 inline-block border border-white shadow-sm"></span>
-                <span className="text-gray-700 text-[11px]">Tercapai (≥ 50%)</span>
+          <div
+            className="absolute left-2.5 md:left-3 md:bottom-6 z-[999] transition-all duration-200"
+            style={
+              isMobile
+                ? {
+                    bottom: `calc(${sheetHeight}vh + 10px)`,
+                    opacity: sheetHeight > 72 ? 0 : 1,
+                    pointerEvents: sheetHeight > 72 ? 'none' : 'auto'
+                  }
+                : undefined
+            }
+          >
+            {isMobile && !isLegendOpen ? (
+              <button
+                onClick={() => setIsLegendOpen(true)}
+                className="bg-white/95 backdrop-blur px-2.5 py-1.5 rounded-full shadow-md border border-gray-200 text-[11px] font-bold text-gray-800 flex items-center gap-1.5"
+              >
+                <span className="flex items-center gap-0.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                  <span className="w-2 h-2 rounded-full bg-amber-500 inline-block"></span>
+                  <span className="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+                </span>
+                <span>Legenda Peta</span>
+                <span className="text-gray-400">▴</span>
+              </button>
+            ) : (
+              <div className="bg-white/95 backdrop-blur p-2.5 md:p-3 rounded-xl shadow-lg border border-gray-200 text-xs w-48 md:w-56">
+                <div
+                  className="flex justify-between items-center border-b pb-1 mb-1.5 cursor-pointer md:cursor-default"
+                  onClick={() => { if (isMobile) setIsLegendOpen(false); }}
+                >
+                  <p className="font-bold text-gray-800 text-[10px] md:text-[11px] uppercase tracking-wider">
+                    Legenda Peta & Status
+                  </p>
+                  {isMobile && (
+                    <span className="text-[10px] font-bold text-gray-400 hover:text-gray-700 px-1">✕</span>
+                  )}
+                </div>
+                <p className="text-[9px] md:text-[10px] font-semibold text-gray-500 mb-1">Capaian Akuisisi Wilayah:</p>
+                <div className="space-y-1 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-emerald-500 inline-block border border-white shadow-sm"></span>
+                    <span className="text-gray-700 text-[10px] md:text-[11px]">Tercapai (≥ 50%)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-amber-500 inline-block border border-white shadow-sm"></span>
+                    <span className="text-gray-700 text-[10px] md:text-[11px]">Sedang (20% – 49.9%)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-red-500 inline-block border border-white shadow-sm"></span>
+                    <span className="text-gray-700 text-[10px] md:text-[11px]">Prioritas (&lt; 20%)</span>
+                  </div>
+                </div>
+                <p className="text-[9px] md:text-[10px] font-semibold text-gray-500 mb-1 border-t pt-1">Status Kepesertaan Warga:</p>
+                <div className="flex justify-between text-[9px] md:text-[10px] font-bold text-gray-700">
+                  <span>🟢 Aktif</span>
+                  <span>🟡 Menunggak</span>
+                  <span>🔴 Non-Aktif</span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-sm bg-amber-500 inline-block border border-white shadow-sm"></span>
-                <span className="text-gray-700 text-[11px]">Sedang (20% – 49.9%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-sm bg-red-500 inline-block border border-white shadow-sm"></span>
-                <span className="text-gray-700 text-[11px]">Prioritas (&lt; 20%)</span>
-              </div>
-            </div>
-            <p className="text-[10px] font-semibold text-gray-500 mb-1 border-t pt-1">Status Kepesertaan Warga:</p>
-            <div className="flex justify-between text-[10px] font-bold text-gray-700">
-              <span>🟢 Aktif</span>
-              <span>🟡 Menunggak</span>
-              <span>🔴 Non-Aktif</span>
-            </div>
+            )}
           </div>
         )}
         
         {/* KARTU JAWABAN PENCARIAN PESERTA */}
         {answerCard && (
-          <div className={`absolute top-14 left-1/2 transform -translate-x-1/2 z-[1000] bg-white rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.3)] border-l-4 ${
+          <div className={`absolute top-12 left-1/2 transform -translate-x-1/2 z-[1000] bg-white rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.3)] border-l-4 ${
             isHeuristic ? getParticipantBadgeStyle(answerCard.Status || 'Aktif').borderLeft : 'border-blue-600'
-          } p-4 w-11/12 md:w-80 animate-fadeIn`}>
+          } p-3 md:p-4 w-11/12 max-w-xs md:w-80 animate-fadeIn`}>
             <button onClick={() => setAnswerCard(null)} className="absolute top-2 right-3 text-gray-400 hover:text-red-500 font-bold">✕</button>
-            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-1 flex items-center gap-1">
+            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-0.5 flex items-center gap-1">
                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                Data Peserta Ditemukan
             </p>
-            <h3 className="font-bold text-lg text-gray-800 leading-tight">{answerCard['Nama TK']}</h3>
-            <p className="text-xs text-gray-500 mb-2.5 font-mono">
+            <h3 className="font-bold text-base md:text-lg text-gray-800 leading-tight">{answerCard['Nama TK']}</h3>
+            <p className="text-[11px] text-gray-500 mb-2 font-mono">
               NIK: {answerCard.NIK} {isHeuristic && answerCard.Pekerjaan ? `• ${answerCard.Pekerjaan}` : ''}
             </p>
 
             {isHeuristic ? (
-              <div className={`p-2.5 rounded-lg border text-xs ${getParticipantBadgeStyle(answerCard.Status || 'Aktif').bg}`}>
-                <div className="flex justify-between items-center mb-1.5 pb-1 border-b border-black/10">
-                  <span className="font-semibold">Status Kepesertaan:</span>
-                  <span className={`font-bold px-2 py-0.5 rounded border text-[11px] ${getParticipantBadgeStyle(answerCard.Status || 'Aktif').badge}`}>
+              <div className={`p-2 rounded-lg border text-xs ${getParticipantBadgeStyle(answerCard.Status || 'Aktif').bg}`}>
+                <div className="flex justify-between items-center mb-1 pb-1 border-b border-black/10">
+                  <span className="font-semibold text-[11px]">Status Kepesertaan:</span>
+                  <span className={`font-bold px-2 py-0.5 rounded border text-[10px] ${getParticipantBadgeStyle(answerCard.Status || 'Aktif').badge}`}>
                     {getParticipantBadgeStyle(answerCard.Status || 'Aktif').dot} {answerCard.Status || 'Aktif'}
                   </span>
                 </div>
-                <span className="block text-gray-700">Kecamatan: <b>{answerCard.Kecamatan}</b></span>
-                <span className="block text-gray-700">Kelurahan: <b>{answerCard.Kelurahan}</b></span>
-                <span className="block text-gray-700">Lingkungan: <b>Romawi {answerCard.Lingkungan}</b></span>
-                {answerCard.KodeKepling && (
-                  <span className="block text-[10px] text-gray-500 font-mono mt-0.5">
-                    ID Kepling: {answerCard.KodeKepling}
-                  </span>
-                )}
+                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
+                  <span className="text-gray-700">Kec: <b>{answerCard.Kecamatan}</b></span>
+                  <span className="text-gray-700">Kel: <b>{answerCard.Kelurahan}</b></span>
+                </div>
+                <span className="block text-[11px] text-gray-700 mt-0.5">Lingkungan: <b>Romawi {answerCard.Lingkungan}</b></span>
                 {answerCard.Status === 'Menunggak' && (
                   <p className="mt-1.5 text-[10px] font-bold text-amber-800 bg-amber-100/80 px-2 py-1 rounded">
-                    ⚠️ Menunggak {answerCard['Bulan Menunggak'] || 1} bulan iuran — perlu tindak lanjut Kepling.
+                    ⚠️ Menunggak {answerCard['Bulan Menunggak'] || 1} bln — perlu tindak lanjut Kepling.
                   </p>
                 )}
               </div>
             ) : (
-              <div className="bg-blue-50 p-2.5 rounded border border-blue-100 text-xs text-gray-700">
+              <div className="bg-blue-50 p-2 rounded border border-blue-100 text-xs text-gray-700">
                 <span className="block font-bold text-blue-800 mb-1">Status: Teregistrasi di BPJS</span>
                 <span className="block text-gray-600">Kecamatan: <b>{answerCard.Kecamatan}</b></span>
                 <span className="block text-gray-600">Kelurahan: <b>{answerCard.Kelurahan}</b></span>
@@ -849,10 +908,15 @@ const Map = () => {
           maxBoundsViscosity={1.0}
           preferCanvas={true}
           renderer={canvasRenderer}
-          className="w-full h-full z-0 pb-16 md:pb-0"
+          className="w-full h-full z-0"
         >
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <MapController bounds={mapBoundsTarget} centerTo={mapCenterTarget} />
+          <MapController
+            bounds={mapBoundsTarget}
+            centerTo={mapCenterTarget}
+            isMobile={isMobile}
+            sheetHeight={sheetHeight}
+          />
 
           {/* LAYER 1: KECAMATAN */}
           {geoDataKecamatan && level === 'kecamatan' && (
@@ -900,7 +964,7 @@ const Map = () => {
             />
           )}
 
-          {/* LAYER 2: KELURAHAN (SAAT LEVEL KELURAHAN ATAU KEPLING) */}
+          {/* LAYER 2: KELURAHAN */}
           {geoDataKelurahan && (level === 'kelurahan' || level === 'kepling') && (
             <GeoJSON 
               key={`layer-kelurahan-${isHeuristic ? 'heuristik' : 'baseline'}-${selectedKecamatan}-${level === 'kepling' ? selectedKelurahan : 'all'}`}
@@ -976,7 +1040,7 @@ const Map = () => {
               <CircleMarker 
                 key={kep.id}
                 center={[kep.lat, kep.lng]}
-                radius={9}
+                radius={isMobile ? 10 : 9}
                 color="white"
                 weight={2}
                 fillColor={markerColor}
@@ -985,50 +1049,50 @@ const Map = () => {
                 eventHandlers={{ 
                   click: (e) => {
                     e.originalEvent.stopPropagation();
-                    if (isMobile) setSheetHeight(15); 
+                    if (isMobile) setSheetHeight(20); 
                   }
                 }}
               >
-                <Popup autoPan={true}>
-                  <div className="w-64 font-sans">
-                    <h3 className="font-bold text-base text-center text-gray-800">{kep.name}</h3>
+                <Popup autoPan={true} autoPanPaddingTopLeft={[15, 60]} autoPanPaddingBottomRight={[15, 160]}>
+                  <div className="w-56 sm:w-64 font-sans">
+                    <h3 className="font-bold text-sm sm:text-base text-center text-gray-800">{kep.name}</h3>
                     {isHeuristic && (
-                      <p className="text-[10px] text-center text-blue-700 font-mono bg-blue-50 py-0.5 px-1.5 rounded border border-blue-100 mt-0.5 mb-1.5">
+                      <p className="text-[10px] text-center text-blue-700 font-mono bg-blue-50 py-0.5 px-1.5 rounded border border-blue-100 mt-0.5 mb-1.5 truncate">
                         ID: {kep.kodeKepling}
                       </p>
                     )}
-                    <hr className="mb-2"/>
-                    <div className="flex justify-between text-xs mb-1"><span className="text-gray-600">Target Lingkungan:</span><b>{kep.target} Peserta</b></div>
+                    <hr className="mb-1.5"/>
+                    <div className="flex justify-between text-xs mb-0.5"><span className="text-gray-600">Target Lingkungan:</span><b>{kep.target} Peserta</b></div>
                     <div className="flex justify-between text-xs"><span className="text-gray-600">Total Terdaftar:</span><b className="text-blue-600">{kep.capaian} Peserta</b></div>
                     <div className={`mt-1.5 px-2 py-1 rounded text-white text-center text-xs font-bold ${isHeuristic ? statusColor.bar : (kep.persentase >= 50 ? 'bg-green-500' : 'bg-red-500')}`}>
                       {kep.persentase.toFixed(1)}% Terealisasi
                     </div>
 
                     {isHeuristic && (
-                      <div className="mt-2.5 pt-2 border-t border-gray-200" onClick={(e) => e.stopPropagation()}>
-                        <p className="text-[10px] font-bold text-gray-500 mb-1 uppercase">Filter Status Warga:</p>
-                        <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
+                      <div className="mt-2 pt-1.5 border-t border-gray-200" onClick={(e) => e.stopPropagation()}>
+                        <p className="text-[9px] font-bold text-gray-500 mb-1 uppercase">Filter Status Warga:</p>
+                        <div className="grid grid-cols-4 gap-1 text-[9px] sm:text-[10px] font-bold">
                           <button
                             onClick={() => setPopupStatusFilter('ALL')}
-                            className={`py-1 rounded border transition ${popupStatusFilter === 'ALL' ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                            className={`py-1 rounded border transition ${popupStatusFilter === 'ALL' ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-600 border-gray-200'}`}
                           >
                             Semua ({kep.capaian})
                           </button>
                           <button
                             onClick={() => setPopupStatusFilter('Menunggak')}
-                            className={`py-1 rounded border transition ${popupStatusFilter === 'Menunggak' ? 'bg-amber-500 text-white border-amber-500' : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'}`}
+                            className={`py-1 rounded border transition ${popupStatusFilter === 'Menunggak' ? 'bg-amber-500 text-white border-amber-500' : 'bg-amber-50 text-amber-800 border-amber-200'}`}
                           >
                             🟡 {kep.menunggak}
                           </button>
                           <button
                             onClick={() => setPopupStatusFilter('Tidak Aktif')}
-                            className={`py-1 rounded border transition ${popupStatusFilter === 'Tidak Aktif' ? 'bg-red-500 text-white border-red-500' : 'bg-red-50 text-red-800 border-red-200 hover:bg-red-100'}`}
+                            className={`py-1 rounded border transition ${popupStatusFilter === 'Tidak Aktif' ? 'bg-red-500 text-white border-red-500' : 'bg-red-50 text-red-800 border-red-200'}`}
                           >
                             🔴 {kep.tidakAktif}
                           </button>
                           <button
                             onClick={() => setPopupStatusFilter('Aktif')}
-                            className={`py-1 rounded border transition ${popupStatusFilter === 'Aktif' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'}`}
+                            className={`py-1 rounded border transition ${popupStatusFilter === 'Aktif' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-emerald-50 text-emerald-800 border-emerald-200'}`}
                           >
                             🟢 {kep.aktif}
                           </button>
@@ -1036,31 +1100,31 @@ const Map = () => {
                       </div>
                     )}
 
-                    <div className="mt-2.5 pt-2 border-t border-gray-200">
-                      <p className="text-[10px] font-bold text-gray-500 mb-1">
+                    <div className="mt-2 pt-1.5 border-t border-gray-200">
+                      <p className="text-[9px] font-bold text-gray-500 mb-1">
                         DAFTAR WARGA ({filteredPeserta.length}):
                       </p>
-                      <div className="max-h-36 overflow-y-auto border border-gray-200 rounded bg-gray-50 p-1 custom-scrollbar" onTouchStart={(e) => e.stopPropagation()}>
+                      <div className="max-h-32 overflow-y-auto border border-gray-200 rounded bg-gray-50 p-1 custom-scrollbar" onTouchStart={(e) => e.stopPropagation()}>
                         {filteredPeserta.length > 0 ? (
                           filteredPeserta.map((p: any, idx: number) => {
                             const pBadge = getParticipantBadgeStyle(p.Status || 'Aktif');
                             const tunggakan = Number(p['Bulan Menunggak'] || 0);
                             return (
-                              <div key={idx} className="border-b border-gray-200 last:border-0 py-1.5 px-1 hover:bg-gray-100 transition flex justify-between items-center gap-1">
-                                <div>
-                                  <div className="font-bold text-gray-700 text-xs leading-tight">{p['Nama TK']}</div>
-                                  <div className="text-gray-500 text-[10px] mt-0.5">
+                              <div key={idx} className="border-b border-gray-200 last:border-0 py-1 px-1 hover:bg-gray-100 transition flex justify-between items-center gap-1">
+                                <div className="min-w-0">
+                                  <div className="font-bold text-gray-700 text-[11px] leading-tight truncate">{p['Nama TK']}</div>
+                                  <div className="text-gray-500 text-[9px] mt-0.5 truncate">
                                     {isHeuristic && p.Pekerjaan ? `${p.Pekerjaan} • ` : ''}
-                                    <span className="font-mono">NIK: {p.NIK}</span>
+                                    <span className="font-mono">{p.NIK}</span>
                                   </div>
                                 </div>
                                 {isHeuristic && (
-                                  <div className="text-right">
-                                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap inline-block ${pBadge.badge}`}>
+                                  <div className="text-right flex-shrink-0">
+                                    <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap inline-block ${pBadge.badge}`}>
                                       {p.Status}
                                     </span>
                                     {p.Status === 'Menunggak' && tunggakan > 0 && (
-                                      <span className="block text-[9px] text-amber-700 font-semibold mt-0.5">
+                                      <span className="block text-[8px] text-amber-700 font-semibold mt-0.5">
                                         {tunggakan} bln
                                       </span>
                                     )}
@@ -1084,32 +1148,56 @@ const Map = () => {
         </MapContainer>
       </div>
 
-      {/* --- PANEL SISI / BOTTOM SHEET DRAGGABLE --- */}
+      {/* --- PANEL SISI / BOTTOM SHEET DRAGGABLE (OPTIMAL UNTUK PONSEL) --- */}
       <div 
-        className="w-full md:w-1/4 bg-blue-900 shadow-[0_-10px_40px_rgba(0,0,0,0.2)] md:shadow-2xl z-[1000] flex flex-col absolute md:relative bottom-0 right-0 rounded-t-3xl md:rounded-none"
-        style={isMobile ? { height: `${sheetHeight}vh`, transition: isDragging ? 'none' : 'height 0.3s ease-out' } : { height: '100%' }}
+        className="w-full md:w-1/4 bg-blue-900 shadow-[0_-10px_40px_rgba(0,0,0,0.28)] md:shadow-2xl z-[1000] flex flex-col absolute md:relative bottom-0 right-0 rounded-t-2xl md:rounded-none"
+        style={isMobile ? { height: `${sheetHeight}vh`, transition: isDragging ? 'none' : 'height 0.25s ease-out' } : { height: '100%' }}
       >
+        {/* HANDLE BAR + TOMBOL QUICK-SNAP UKURAN PANEL PONSEL */}
         <div 
-          className="md:hidden h-[48px] flex flex-col items-center justify-center bg-blue-950 rounded-t-3xl cursor-ns-resize flex-shrink-0 touch-none"
+          className="md:hidden px-3 py-1.5 flex items-center justify-between bg-blue-950 rounded-t-2xl cursor-ns-resize flex-shrink-0 touch-none border-b border-blue-900"
           onMouseDown={startDrag} onTouchStart={startDrag}
         >
-          <div className="w-12 h-1.5 bg-blue-300 rounded-full mb-1 opacity-80 pointer-events-none"></div>
-          <span className="text-blue-100 text-[10px] font-bold uppercase tracking-widest pointer-events-none">Geser untuk Menyesuaikan</span>
+          <span className="text-blue-300 text-[9px] font-bold uppercase tracking-wider pointer-events-none">
+            ☰ Panel Data
+          </span>
+          <div className="w-10 h-1.5 bg-blue-400/80 rounded-full pointer-events-none"></div>
+          {/* H7: Quick-Snap Buttons agar pengguna HP tidak wajib drag manual */}
+          <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => setSheetHeight(20)}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition ${sheetHeight <= 25 ? 'bg-blue-600 text-white' : 'bg-blue-900 text-blue-300'}`}
+            >
+              Peta
+            </button>
+            <button
+              onClick={() => setSheetHeight(45)}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition ${sheetHeight > 25 && sheetHeight < 65 ? 'bg-blue-600 text-white' : 'bg-blue-900 text-blue-300'}`}
+            >
+              50%
+            </button>
+            <button
+              onClick={() => setSheetHeight(82)}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition ${sheetHeight >= 65 ? 'bg-blue-600 text-white' : 'bg-blue-900 text-blue-300'}`}
+            >
+              Penuh
+            </button>
+          </div>
         </div>
 
-        {/* HEADER PANEL KANAN */}
-        <div className="bg-blue-950 p-4 md:p-5 border-b border-blue-800 flex-shrink-0 relative">
-          <div className="flex justify-between items-start mb-3">
-            <div className="text-white">
-              <h1 className="text-lg md:text-xl font-bold leading-tight">Dashboard UCJ 2026</h1>
-              <p className="text-blue-300 text-xs mt-0.5">
+        {/* HEADER PANEL KANAN (LEBIH RINGKAS DI PONSEL AGAR RUANG SCROLL LUAS) */}
+        <div className="bg-blue-950 px-3.5 py-2.5 md:p-5 border-b border-blue-800 flex-shrink-0 relative">
+          <div className="flex justify-between items-center mb-2 md:mb-3">
+            <div className="text-white min-w-0">
+              <h1 className="text-sm md:text-xl font-bold leading-tight truncate">Dashboard UCJ 2026</h1>
+              <p className="text-blue-300 text-[10px] md:text-xs truncate">
                 {isHeuristic ? 'Panel Pembina & Kepala Lingkungan' : 'BPJS Ketenagakerjaan Medan'}
               </p>
             </div>
             {isHeuristic && (
               <button
                 onClick={() => setShowHelpModal(true)}
-                className="bg-blue-800 hover:bg-blue-700 text-blue-100 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-blue-600 transition flex items-center gap-1"
+                className="bg-blue-800 hover:bg-blue-700 text-blue-100 text-[11px] md:text-xs font-bold px-2 py-1 md:px-2.5 md:py-1.5 rounded-lg border border-blue-600 transition flex items-center gap-1 flex-shrink-0"
               >
                 <span>?</span> Panduan
               </button>
@@ -1118,53 +1206,54 @@ const Map = () => {
 
           {/* KOLOM PENCARIAN */}
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <svg className="h-4 w-4 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none">
+              <svg className="h-3.5 w-3.5 md:h-4 md:w-4 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
             </div>
             <input
               type="text"
-              className="block w-full pl-9 pr-8 py-2 border border-blue-700 rounded-lg leading-5 bg-blue-900 text-blue-100 placeholder-blue-400 focus:outline-none focus:bg-white focus:text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 sm:text-sm transition-colors duration-200"
+              className="block w-full pl-8 pr-7 py-1.5 md:py-2 border border-blue-700 rounded-lg text-xs md:text-sm bg-blue-900 text-blue-100 placeholder-blue-400 focus:outline-none focus:bg-white focus:text-gray-900 focus:border-blue-500 transition-colors"
               placeholder="Cari Nama Warga, NIK, atau Kelurahan..."
               value={searchQuery}
+              onFocus={() => { if (isMobile && sheetHeight < 55) setSheetHeight(65); }}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             {isHeuristic && searchQuery.length > 0 && (
               <button
                 onClick={() => { setSearchQuery(''); setSearchResults([]); }}
-                className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-blue-300 hover:text-red-400 font-bold"
+                className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-blue-300 hover:text-red-400 font-bold text-xs"
               >
                 ✕
               </button>
             )}
             
             {isHeuristic && searchQuery.length > 0 && searchQuery.length < 3 && (
-              <div className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-gray-200 p-2.5 text-xs text-gray-500">
+              <div className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-gray-200 p-2 text-[11px] text-gray-500">
                 Ketik minimal <b>3 karakter</b> untuk mencari Nama Warga, NIK, atau Kelurahan...
               </div>
             )}
 
             {searchResults.length > 0 && (
-              <div className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-gray-200 max-h-60 overflow-auto">
-                <ul className="py-1 text-sm text-gray-700">
+              <div className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-gray-200 max-h-52 overflow-auto">
+                <ul className="py-1 text-xs md:text-sm text-gray-700">
                   {searchResults.map((res, idx) => (
                     <li 
                       key={idx} 
-                      className="px-4 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0"
+                      className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0"
                       onClick={() => handleSelectSearchResult(res)}
                     >
                       {res.type === 'kelurahan' ? (
                         <div>
                           <span className="font-bold text-emerald-700 block">🗺️ Kel. {res.data.name}</span>
-                          <span className="text-[10px] text-gray-500">Kec. {res.data.kecamatan} • Klik untuk buka peta</span>
+                          <span className="text-[10px] text-gray-500">Kec. {res.data.kecamatan} • Ketuk untuk buka peta</span>
                         </div>
                       ) : (
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <span className="font-bold text-blue-700 block">🧑‍💼 {res.data['Nama TK']}</span>
+                        <div className="flex justify-between items-center gap-2">
+                          <div className="min-w-0">
+                            <span className="font-bold text-blue-700 block truncate">🧑‍💼 {res.data['Nama TK']}</span>
                             <span className="text-[10px] text-gray-500 font-mono block mt-0.5">NIK: {res.data.NIK}</span>
                           </div>
                           {isHeuristic && res.data.Status && (
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${getParticipantBadgeStyle(res.data.Status).badge}`}>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border flex-shrink-0 ${getParticipantBadgeStyle(res.data.Status).badge}`}>
                               {res.data.Status}
                             </span>
                           )}
@@ -1177,14 +1266,14 @@ const Map = () => {
             )}
 
             {isHeuristic && searchQuery.length >= 3 && searchResults.length === 0 && (
-              <div className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-red-200 p-3 text-center">
-                <p className="text-xs font-bold text-red-600 mb-1">Data &ldquo;{searchQuery}&rdquo; Tidak Ditemukan</p>
-                <p className="text-[11px] text-gray-500 mb-2">
+              <div className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-red-200 p-2.5 text-center">
+                <p className="text-xs font-bold text-red-600 mb-0.5">Data &ldquo;{searchQuery}&rdquo; Tidak Ditemukan</p>
+                <p className="text-[10px] text-gray-500 mb-1.5">
                   Pastikan ejaan Nama Kelurahan benar atau masukkan nomor NIK warga yang terdaftar.
                 </p>
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="text-[11px] bg-red-50 hover:bg-red-100 text-red-700 font-semibold px-2.5 py-1 rounded border border-red-200 transition"
+                  className="text-[10px] bg-red-50 hover:bg-red-100 text-red-700 font-semibold px-2.5 py-1 rounded border border-red-200 transition"
                 >
                   Reset Pencarian
                 </button>
@@ -1195,7 +1284,7 @@ const Map = () => {
 
         {/* H3: STICKY BREADCRUMB NAVIGATION */}
         {isHeuristic && (
-          <div className="bg-blue-900/90 px-4 py-2 border-b border-blue-800 text-[11px] text-blue-100 flex items-center gap-1 flex-wrap flex-shrink-0">
+          <div className="bg-blue-900/90 px-3.5 py-1.5 border-b border-blue-800 text-[10px] md:text-[11px] text-blue-100 flex items-center gap-1 flex-wrap flex-shrink-0">
             <button
               onClick={handleResetToCity}
               className={`hover:underline font-semibold ${level === 'kecamatan' ? 'text-white font-bold' : 'text-blue-300'}`}
@@ -1207,7 +1296,7 @@ const Map = () => {
                 <span className="text-blue-400">/</span>
                 <button
                   onClick={handleBackToKecamatan}
-                  className={`hover:underline font-semibold truncate max-w-[110px] ${level === 'kelurahan' ? 'text-white font-bold' : 'text-blue-300'}`}
+                  className={`hover:underline font-semibold truncate max-w-[115px] ${level === 'kelurahan' ? 'text-white font-bold' : 'text-blue-300'}`}
                 >
                   Kec. {selectedKecamatan}
                 </button>
@@ -1216,7 +1305,7 @@ const Map = () => {
             {selectedKelurahan && (
               <>
                 <span className="text-blue-400">/</span>
-                <span className="text-white font-bold truncate max-w-[110px]">
+                <span className="text-white font-bold truncate max-w-[115px]">
                   Kel. {selectedKelurahan}
                 </span>
               </>
@@ -1224,42 +1313,42 @@ const Map = () => {
           </div>
         )}
 
-        {/* KONTEN UTAMA SIDEBAR */}
-        <div className="flex-1 overflow-y-auto bg-gray-50 block">
+        {/* KONTEN UTAMA SIDEBAR (SCROLLABLE) */}
+        <div className="flex-1 overflow-y-auto bg-gray-50 block overscroll-contain">
           
           {/* ================= LEVEL 1: KOTA / KECAMATAN ================= */}
           {level === 'kecamatan' && (
             <div className="animate-fadeIn">
-              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Agregat Kota Medan</p>
-                <div className="grid grid-cols-3 gap-1 md:gap-2 mb-2">
-                  <div className="border rounded p-1.5 text-center bg-gray-50">
+              <div className="bg-white p-2.5 md:p-4 border-b border-gray-200 shadow-sm">
+                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Agregat Kota Medan</p>
+                <div className="grid grid-cols-3 gap-1.5 mb-1.5">
+                  <div className="border rounded p-1 md:p-1.5 text-center bg-gray-50">
                     <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">KECAMATAN</p>
-                    <p className="text-sm md:text-base font-bold text-gray-800">21</p>
+                    <p className="text-xs md:text-base font-bold text-gray-800">21</p>
                   </div>
-                  <div className="border rounded p-1.5 text-center bg-gray-50">
+                  <div className="border rounded p-1 md:p-1.5 text-center bg-gray-50">
                     <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">KELURAHAN</p>
-                    <p className="text-sm md:text-base font-bold text-gray-800">151</p>
+                    <p className="text-xs md:text-base font-bold text-gray-800">151</p>
                   </div>
-                  <div className="border rounded p-1.5 text-center bg-gray-50">
+                  <div className="border rounded p-1 md:p-1.5 text-center bg-gray-50">
                     <p className="text-[8px] md:text-[10px] text-gray-500 font-semibold">LINGKUNGAN</p>
-                    <p className="text-sm md:text-base font-bold text-gray-800">2.001</p>
+                    <p className="text-xs md:text-base font-bold text-gray-800">2.001</p>
                   </div>
                 </div>
-                <div className="flex gap-1 md:gap-2 mb-2">
-                  <div className="flex-1 border rounded p-1.5 md:p-2">
-                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
-                    <p className="text-sm md:text-base font-bold text-gray-800">100.050</p>
+                <div className="flex gap-1.5 mb-1.5">
+                  <div className="flex-1 border rounded p-1.5">
+                    <p className="text-[8px] md:text-xs text-gray-500 font-semibold">TARGET PESERTA</p>
+                    <p className="text-xs md:text-base font-bold text-gray-800">100.050</p>
                   </div>
-                  <div className="flex-1 border rounded p-1.5 md:p-2">
-                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TOTAL AKUISISI</p>
-                    <p className="text-sm md:text-base font-bold text-blue-600">{aggKota.capaian.toLocaleString('id-ID')}</p>
+                  <div className="flex-1 border rounded p-1.5">
+                    <p className="text-[8px] md:text-xs text-gray-500 font-semibold">TOTAL AKUISISI</p>
+                    <p className="text-xs md:text-base font-bold text-blue-600">{aggKota.capaian.toLocaleString('id-ID')}</p>
                   </div>
                 </div>
-                <div className="border rounded p-2">
-                   <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between items-center">
+                <div className="border rounded p-1.5 md:p-2">
+                   <p className="text-[9px] md:text-xs text-gray-500 font-semibold flex justify-between items-center">
                      <span>PERSENTASE CAPAIAN</span>
-                     <span className={`text-sm md:text-base font-bold ${isHeuristic ? getStatusColor(aggKota.persentase).text : (aggKota.persentase >= 50 ? 'text-green-500' : 'text-red-500')}`}>
+                     <span className={`text-xs md:text-base font-bold ${isHeuristic ? getStatusColor(aggKota.persentase).text : (aggKota.persentase >= 50 ? 'text-green-500' : 'text-red-500')}`}>
                        {aggKota.persentase.toFixed(1)}%
                      </span>
                    </p>
@@ -1271,14 +1360,14 @@ const Map = () => {
                 {renderStatusBreakdown(aggKota)}
               </div>
 
-              <div className="p-3 md:p-4 pb-8">
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-sm md:text-base font-bold text-gray-800">Pilih Kecamatan (21)</h2>
+              <div className="p-2.5 md:p-4 pb-10">
+                <div className="flex items-center justify-between mb-2 gap-1">
+                  <h2 className="text-xs md:text-base font-bold text-gray-800">Pilih Kecamatan (21)</h2>
                   {isHeuristic && (
                     <select
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as any)}
-                      className="text-[11px] bg-white border border-gray-300 rounded-md px-2 py-1 text-gray-700 font-semibold focus:outline-none focus:border-blue-500"
+                      className="text-[10px] md:text-[11px] bg-white border border-gray-300 rounded-md px-2 py-1 text-gray-700 font-semibold focus:outline-none focus:border-blue-500"
                     >
                       <option value="menunggak">⚠️ Menunggak Terbanyak</option>
                       <option value="asc">Capaian Terendah</option>
@@ -1288,7 +1377,7 @@ const Map = () => {
                   )}
                 </div>
 
-                <div className="space-y-2 mt-2">
+                <div className="space-y-2 mt-1.5">
                   {validKecamatanNames.map((kec, idx) => {
                     const stat = getAggregate('kecamatan', kec);
                     const statusColor = getStatusColor(stat.persentase);
@@ -1307,7 +1396,7 @@ const Map = () => {
                             Kecamatan {kec}
                           </span>
                           {isHeuristic && (
-                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${statusColor.bgBadge}`}>
+                            <span className={`text-[10px] md:text-[11px] font-bold px-2 py-0.5 rounded border ${statusColor.bgBadge}`}>
                               {stat.persentase.toFixed(1)}%
                             </span>
                           )}
@@ -1321,7 +1410,7 @@ const Map = () => {
                             <div className="w-full bg-gray-100 rounded-full h-1.5 mb-2">
                               <div className={`h-1.5 rounded-full ${statusColor.bar}`} style={{ width: `${Math.min(stat.persentase, 100)}%` }}></div>
                             </div>
-                            <div className="flex gap-1.5 text-[10px] font-semibold">
+                            <div className="flex flex-wrap gap-1 text-[9px] md:text-[10px] font-semibold">
                               <span className="bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200">
                                 🟢 Aktif: {stat.aktif}
                               </span>
@@ -1345,22 +1434,22 @@ const Map = () => {
           {/* ================= LEVEL 2: KELURAHAN ================= */}
           {level === 'kelurahan' && (
             <div className="animate-fadeIn">
-              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Agregat Kec. {selectedKecamatan}</p>
-                <div className="flex gap-1 md:gap-2 mb-2">
-                  <div className="flex-1 border rounded p-1.5 md:p-2">
-                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET ({aggKec.jmlLingkungan} KEPLING)</p>
-                    <p className="text-sm md:text-base font-bold text-gray-800">{aggKec.target.toLocaleString('id-ID')}</p>
+              <div className="bg-white p-2.5 md:p-4 border-b border-gray-200 shadow-sm">
+                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Agregat Kec. {selectedKecamatan}</p>
+                <div className="flex gap-1.5 mb-1.5">
+                  <div className="flex-1 border rounded p-1.5">
+                    <p className="text-[8px] md:text-xs text-gray-500 font-semibold">TARGET ({aggKec.jmlLingkungan} KEPLING)</p>
+                    <p className="text-xs md:text-base font-bold text-gray-800">{aggKec.target.toLocaleString('id-ID')}</p>
                   </div>
-                  <div className="flex-1 border rounded p-1.5 md:p-2">
-                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">CAPAIAN</p>
-                    <p className="text-sm md:text-base font-bold text-blue-600">{aggKec.capaian.toLocaleString('id-ID')}</p>
+                  <div className="flex-1 border rounded p-1.5">
+                    <p className="text-[8px] md:text-xs text-gray-500 font-semibold">CAPAIAN</p>
+                    <p className="text-xs md:text-base font-bold text-blue-600">{aggKec.capaian.toLocaleString('id-ID')}</p>
                   </div>
                 </div>
-                <div className="border rounded p-2">
-                   <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between">
+                <div className="border rounded p-1.5 md:p-2">
+                   <p className="text-[9px] md:text-xs text-gray-500 font-semibold flex justify-between">
                      <span>PERSENTASE</span>
-                     <span className={`text-sm md:text-base font-bold ${isHeuristic ? getStatusColor(aggKec.persentase).text : (aggKec.persentase >= 50 ? 'text-green-500' : 'text-red-500')}`}>
+                     <span className={`text-xs md:text-base font-bold ${isHeuristic ? getStatusColor(aggKec.persentase).text : (aggKec.persentase >= 50 ? 'text-green-500' : 'text-red-500')}`}>
                        {aggKec.persentase.toFixed(1)}%
                      </span>
                    </p>
@@ -1372,18 +1461,18 @@ const Map = () => {
                 {renderStatusBreakdown(aggKec)}
               </div>
 
-              <div className="p-3 md:p-4 pb-8">
-                <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mb-3 text-xs md:text-sm shadow-sm">
+              <div className="p-2.5 md:p-4 pb-10">
+                <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-1.5 md:py-2 rounded-md font-semibold transition mb-2.5 text-xs md:text-sm shadow-sm">
                   &larr; Kembali ke Peta Kota
                 </button>
 
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-sm md:text-base font-bold text-gray-800">Pilih Kelurahan ({validKelurahanNames.length})</h2>
+                <div className="flex items-center justify-between mb-2 gap-1">
+                  <h2 className="text-xs md:text-base font-bold text-gray-800">Pilih Kelurahan ({validKelurahanNames.length})</h2>
                   {isHeuristic && (
                     <select
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as any)}
-                      className="text-[11px] bg-white border border-gray-300 rounded-md px-2 py-1 text-gray-700 font-semibold focus:outline-none focus:border-blue-500"
+                      className="text-[10px] md:text-[11px] bg-white border border-gray-300 rounded-md px-2 py-1 text-gray-700 font-semibold focus:outline-none focus:border-blue-500"
                     >
                       <option value="menunggak">⚠️ Menunggak Terbanyak</option>
                       <option value="asc">Capaian Terendah</option>
@@ -1413,7 +1502,7 @@ const Map = () => {
                               Kel. {kel}
                             </span>
                             {isHeuristic && (
-                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${statusColor.bgBadge}`}>
+                              <span className={`text-[10px] md:text-[11px] font-bold px-2 py-0.5 rounded border ${statusColor.bgBadge}`}>
                                 {stat.persentase.toFixed(1)}%
                               </span>
                             )}
@@ -1427,7 +1516,7 @@ const Map = () => {
                               <div className="w-full bg-gray-100 rounded-full h-1.5 mb-2">
                                 <div className={`h-1.5 rounded-full ${statusColor.bar}`} style={{ width: `${Math.min(stat.persentase, 100)}%` }}></div>
                               </div>
-                              <div className="flex gap-1.5 text-[10px] font-semibold">
+                              <div className="flex flex-wrap gap-1 text-[9px] md:text-[10px] font-semibold">
                                 <span className="bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200">
                                   🟢 Aktif: {stat.aktif}
                                 </span>
@@ -1454,22 +1543,22 @@ const Map = () => {
           {/* ================= LEVEL 3: LINGKUNGAN / KEPLING ================= */}
           {level === 'kepling' && (
             <div className="animate-fadeIn">
-              <div className="bg-white p-3 md:p-4 border-b border-gray-200 shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Agregat Kel. {selectedKelurahan}</p>
-                <div className="flex gap-1 md:gap-2 mb-2">
-                  <div className="flex-1 border rounded p-1.5 md:p-2">
-                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">TARGET ({aggKel.jmlLingkungan} KEPLING)</p>
-                    <p className="text-sm md:text-base font-bold text-gray-800">{aggKel.target.toLocaleString('id-ID')}</p>
+              <div className="bg-white p-2.5 md:p-4 border-b border-gray-200 shadow-sm">
+                <p className="text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Agregat Kel. {selectedKelurahan}</p>
+                <div className="flex gap-1.5 mb-1.5">
+                  <div className="flex-1 border rounded p-1.5">
+                    <p className="text-[8px] md:text-xs text-gray-500 font-semibold">TARGET ({aggKel.jmlLingkungan} KEPLING)</p>
+                    <p className="text-xs md:text-base font-bold text-gray-800">{aggKel.target.toLocaleString('id-ID')}</p>
                   </div>
-                  <div className="flex-1 border rounded p-1.5 md:p-2">
-                    <p className="text-[9px] md:text-xs text-gray-500 font-semibold">CAPAIAN</p>
-                    <p className="text-sm md:text-base font-bold text-blue-600">{aggKel.capaian.toLocaleString('id-ID')}</p>
+                  <div className="flex-1 border rounded p-1.5">
+                    <p className="text-[8px] md:text-xs text-gray-500 font-semibold">CAPAIAN</p>
+                    <p className="text-xs md:text-base font-bold text-blue-600">{aggKel.capaian.toLocaleString('id-ID')}</p>
                   </div>
                 </div>
-                <div className="border rounded p-2">
-                   <p className="text-[10px] md:text-xs text-gray-500 font-semibold flex justify-between">
+                <div className="border rounded p-1.5 md:p-2">
+                   <p className="text-[9px] md:text-xs text-gray-500 font-semibold flex justify-between">
                      <span>PERSENTASE</span>
-                     <span className={`text-sm md:text-base font-bold ${isHeuristic ? getStatusColor(aggKel.persentase).text : (aggKel.persentase >= 50 ? 'text-green-500' : 'text-red-500')}`}>
+                     <span className={`text-xs md:text-base font-bold ${isHeuristic ? getStatusColor(aggKel.persentase).text : (aggKel.persentase >= 50 ? 'text-green-500' : 'text-red-500')}`}>
                         {aggKel.persentase.toFixed(1)}%
                      </span>
                    </p>
@@ -1481,17 +1570,17 @@ const Map = () => {
                 {renderStatusBreakdown(aggKel)}
               </div>
 
-              <div className="p-3 md:p-4 pb-8">
-                <button onClick={handleBackToKecamatan} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-2 rounded-md font-semibold transition mb-3 text-xs md:text-sm">
+              <div className="p-2.5 md:p-4 pb-10">
+                <button onClick={handleBackToKecamatan} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-1.5 md:py-2 rounded-md font-semibold transition mb-2.5 text-xs md:text-sm">
                   &larr; Kembali ke Daftar Kelurahan
                 </button>
-                <div className="flex items-center justify-between border-b pb-2 mb-3">
-                  <h3 className="text-sm font-bold text-gray-700">Daftar Kepling ({sortedKeplingData.length})</h3>
+                <div className="flex items-center justify-between border-b pb-2 mb-2.5 gap-1">
+                  <h3 className="text-xs md:text-sm font-bold text-gray-700">Daftar Kepling ({sortedKeplingData.length})</h3>
                   {isHeuristic && (
                     <select
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as any)}
-                      className="text-[11px] bg-white border border-gray-300 rounded-md px-2 py-1 text-gray-700 font-semibold"
+                      className="text-[10px] md:text-[11px] bg-white border border-gray-300 rounded-md px-2 py-1 text-gray-700 font-semibold"
                     >
                       <option value="menunggak">⚠️ Menunggak Terbanyak</option>
                       <option value="asc">Capaian Terendah</option>
@@ -1501,7 +1590,7 @@ const Map = () => {
                   )}
                 </div>
                 
-                <div className="space-y-2 md:space-y-3">
+                <div className="space-y-2">
                   {sortedKeplingData.map((kep) => {
                     const statusColor = getStatusColor(kep.persentase);
                     return (
@@ -1510,9 +1599,9 @@ const Map = () => {
                         onClick={() => {
                           const marker = markerRefs.current[kep.id];
                           if (marker) marker.openPopup();
-                          if (isMobile) setSheetHeight(15);
+                          if (isMobile) setSheetHeight(20);
                         }}
-                        className="bg-white border border-gray-200 rounded-lg p-2.5 md:p-3 shadow-sm hover:shadow-md hover:border-blue-400 hover:ring-1 hover:ring-blue-400 transition cursor-pointer"
+                        className="bg-white border border-gray-200 rounded-lg p-2.5 md:p-3 shadow-sm hover:shadow-md hover:border-blue-400 transition cursor-pointer"
                       >
                         <div className="flex justify-between items-center mb-0.5">
                           <span className="text-xs md:text-sm font-bold text-gray-800">{kep.name}</span>
@@ -1521,7 +1610,7 @@ const Map = () => {
                           </span>
                         </div>
                         {isHeuristic && (
-                          <p className="text-[10px] font-mono text-blue-600 mb-1">
+                          <p className="text-[10px] font-mono text-blue-600 mb-1 truncate">
                             Kepling: {kep.kodeKepling}
                           </p>
                         )}
@@ -1530,7 +1619,7 @@ const Map = () => {
                            <span>Target: {kep.target}</span>
                         </div>
                         {isHeuristic && (
-                          <div className="flex gap-1.5 text-[10px] font-semibold pt-1 border-t border-gray-100">
+                          <div className="flex flex-wrap gap-1.5 text-[9px] md:text-[10px] font-semibold pt-1 border-t border-gray-100">
                             <span className="text-emerald-700">🟢 Aktif: {kep.aktif}</span>
                             <span className="text-gray-300">|</span>
                             <span className="text-amber-700 font-bold">🟡 Menunggak: {kep.menunggak}</span>
@@ -1551,19 +1640,19 @@ const Map = () => {
       {/* --- H10: MODAL PANDUAN PENGGUNA --- */}
       {showHelpModal && (
         <div className="fixed inset-0 z-[2000] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-200 animate-fadeIn">
-            <div className="flex justify-between items-center border-b pb-3 mb-3">
-              <h2 className="text-base font-bold text-gray-800">📖 Panduan Staf Pembina & Kepling</h2>
+          <div className="bg-white rounded-2xl max-w-md w-full p-4 md:p-5 shadow-2xl border border-gray-200 animate-fadeIn max-h-[85vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b pb-2.5 mb-3">
+              <h2 className="text-sm md:text-base font-bold text-gray-800">📖 Panduan Staf Pembina & Kepling</h2>
               <button onClick={() => setShowHelpModal(false)} className="text-gray-400 hover:text-red-500 font-bold text-lg">✕</button>
             </div>
             <div className="space-y-3 text-xs text-gray-600 leading-relaxed">
               <div>
                 <p className="font-bold text-gray-800 mb-0.5">1. Pemantauan Wilayah Binaan (Staf Pembina)</p>
-                <p>Gunakan fitur urutkan <b>&ldquo;⚠️ Menunggak Terbanyak&rdquo;</b> atau <b>&ldquo;Capaian Terendah&rdquo;</b> di panel kanan untuk menemukan Kecamatan, Kelurahan, atau Lingkungan yang membutuhkan prioritas pembinaan.</p>
+                <p>Gunakan fitur urutkan <b>&ldquo;⚠️ Menunggak Terbanyak&rdquo;</b> atau <b>&ldquo;Capaian Terendah&rdquo;</b> di panel bawah/kanan untuk menemukan wilayah yang membutuhkan prioritas pembinaan.</p>
               </div>
               <div>
                 <p className="font-bold text-gray-800 mb-0.5">2. Pemantauan Status Warga (Kepala Lingkungan)</p>
-                <p>Klik Lingkungan Anda (berdasarkan nomor Romawi I–XXX) untuk membuka daftar warga dan gunakan penyaring status:</p>
+                <p>Ketuk Lingkungan Anda (nomor Romawi I–XXX) untuk membuka daftar warga dan gunakan penyaring status:</p>
                 <ul className="list-disc pl-4 mt-1 space-y-0.5">
                   <li><b className="text-emerald-700">🟢 Aktif:</b> Kepesertaan warga aktif dan iuran berjalan lancar.</li>
                   <li><b className="text-amber-700">🟡 Menunggak:</b> Warga terlambat membayar iuran (prioritas pengingat/penagihan).</li>
@@ -1571,13 +1660,13 @@ const Map = () => {
                 </ul>
               </div>
               <div>
-                <p className="font-bold text-gray-800 mb-0.5">3. Verifikasi Cepat NIK / Nama Warga</p>
-                <p>Ketik minimal 3 karakter Nama atau NIK warga pada kolom pencarian di kanan atas untuk melihat lokasi lingkungan beserta status aktif/menunggak warga tersebut.</p>
+                <p className="font-bold text-gray-800 mb-0.5">3. Navigasi Layar Ponsel</p>
+                <p>Gunakan tombol cepat <b>Peta | 50% | Penuh</b> pada bar atas panel biru atau geser bar tersebut untuk mengatur luas tampilan peta dan daftar data.</p>
               </div>
             </div>
             <button
               onClick={() => setShowHelpModal(false)}
-              className="mt-5 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-lg transition"
+              className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-lg transition"
             >
               Mengerti & Tutup Panduan
             </button>
