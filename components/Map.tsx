@@ -866,9 +866,12 @@ const Map = () => {
                Data Peserta Ditemukan
             </p>
             <h3 className="font-bold text-base md:text-lg text-gray-800 leading-tight">{answerCard['Nama TK']}</h3>
-            <p className="text-[11px] text-gray-500 mb-2 font-mono">
-              NIK: {answerCard.NIK} {isHeuristic && answerCard.Pekerjaan ? `• ${answerCard.Pekerjaan}` : ''}
-            </p>
+            <div className="mb-2">
+              <p className="text-[11px] text-gray-600 font-mono tracking-tight">NIK: {answerCard.NIK}</p>
+                {isHeuristic && answerCard.Pekerjaan && (
+              <p className="text-[10px] text-gray-400 mt-0.5">{answerCard.Pekerjaan}</p>
+            )}
+            </div>
 
             {isHeuristic ? (
               <div className={`p-2 rounded-lg border text-xs ${getParticipantBadgeStyle(answerCard.Status || 'Aktif').bg}`}>
@@ -1111,13 +1114,17 @@ const Map = () => {
                             const tunggakan = Number(p['Bulan Menunggak'] || 0);
                             return (
                               <div key={idx} className="border-b border-gray-200 last:border-0 py-1 px-1 hover:bg-gray-100 transition flex justify-between items-center gap-1">
-                                <div className="min-w-0">
-                                  <div className="font-bold text-gray-700 text-[11px] leading-tight truncate">{p['Nama TK']}</div>
-                                  <div className="text-gray-500 text-[9px] mt-0.5 truncate">
-                                    {isHeuristic && p.Pekerjaan ? `${p.Pekerjaan} • ` : ''}
-                                    <span className="font-mono">{p.NIK}</span>
-                                  </div>
+                              <div className="min-w-0 flex-1 pr-1">
+                                <div className="font-bold text-gray-700 text-[11px] leading-tight truncate">{p['Nama TK']}</div>
+                                <div className="text-gray-600 text-[10px] font-mono mt-0.5 tracking-tight">
+                                  {p.NIK}
                                 </div>
+                                {isHeuristic && p.Pekerjaan && (
+                                  <div className="text-gray-400 text-[8px] mt-0.5 truncate">
+                                    {p.Pekerjaan}
+                                  </div>
+                                )}
+                              </div>
                                 {isHeuristic && (
                                   <div className="text-right flex-shrink-0">
                                     <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap inline-block ${pBadge.badge}`}>
