@@ -739,7 +739,7 @@ const Map = () => {
   };
 
   return (
-    <div className="flex flex-col md:flex-row w-full h-[100dvh] relative bg-gray-50 overflow-hidden">
+    <div className="flex flex-col md:flex-row w-full h-screen relative bg-gray-50 overflow-hidden fixed inset-0">
       
       {/* --- AREA PETA --- */}
       <div className="w-full md:w-3/4 h-full relative bg-gray-100 z-0">
@@ -1150,8 +1150,8 @@ const Map = () => {
 
       {/* --- PANEL SISI / BOTTOM SHEET DRAGGABLE (OPTIMAL UNTUK PONSEL) --- */}
       <div 
-        className="w-full md:w-1/4 bg-blue-900 shadow-[0_-10px_40px_rgba(0,0,0,0.28)] md:shadow-2xl z-[1000] flex flex-col absolute md:relative bottom-0 right-0 rounded-t-2xl md:rounded-none"
-        style={isMobile ? { height: `${sheetHeight}vh`, transition: isDragging ? 'none' : 'height 0.25s ease-out' } : { height: '100%' }}
+        className="w-full md:w-1/4 bg-blue-900 shadow-[0_-10px_40px_rgba(0,0,0,0.28)] md:shadow-2xl z-[1000] flex flex-col absolute md:relative bottom-0 left-0 right-0 rounded-t-2xl md:rounded-none"
+        style={isMobile ? { height: `${sheetHeight}vh`, bottom: 0, transition: isDragging ? 'none' : 'height 0.25s ease-out' } : { height: '100%' }}
       >
         {/* HANDLE BAR + TOMBOL QUICK-SNAP UKURAN PANEL PONSEL */}
         <div 
@@ -1360,7 +1360,7 @@ const Map = () => {
                 {renderStatusBreakdown(aggKota)}
               </div>
 
-              <div className="p-2.5 md:p-4 pb-10">
+              <div className="p-2.5 md:p-4 pb-20 md:pb-10 min-h-full">
                 <div className="flex items-center justify-between mb-2 gap-1">
                   <h2 className="text-xs md:text-base font-bold text-gray-800">Pilih Kecamatan (21)</h2>
                   {isHeuristic && (
@@ -1461,7 +1461,7 @@ const Map = () => {
                 {renderStatusBreakdown(aggKec)}
               </div>
 
-              <div className="p-2.5 md:p-4 pb-10">
+              <div className="p-2.5 md:p-4 pb-20 md:pb-10 min-h-full">
                 <button onClick={handleResetToCity} className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 py-1.5 md:py-2 rounded-md font-semibold transition mb-2.5 text-xs md:text-sm shadow-sm">
                   &larr; Kembali ke Peta Kota
                 </button>
@@ -1570,7 +1570,7 @@ const Map = () => {
                 {renderStatusBreakdown(aggKel)}
               </div>
 
-              <div className="p-2.5 md:p-4 pb-10">
+              <div className="p-2.5 md:p-4 pb-20 md:pb-10 min-h-full">
                 <button onClick={handleBackToKecamatan} className="w-full bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-700 py-1.5 md:py-2 rounded-md font-semibold transition mb-2.5 text-xs md:text-sm">
                   &larr; Kembali ke Daftar Kelurahan
                 </button>
